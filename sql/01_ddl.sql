@@ -36,6 +36,69 @@ GO
 
 
 -- ============================================================================
+-- PART 0.5: DROP TABLES IN REVERSE DEPENDENCY ORDER (idempotency)
+-- ============================================================================
+
+-- Audit
+DROP TABLE IF EXISTS audit.etl_run_log;
+
+-- Gold bridges & facts (depend on dims)
+DROP TABLE IF EXISTS gold.position_team_bridge;
+DROP TABLE IF EXISTS gold.entity_asset_bridge;
+DROP TABLE IF EXISTS gold.portfolio_entity_bridge;
+DROP TABLE IF EXISTS gold.position_fact;
+DROP TABLE IF EXISTS gold.position_transactions_fact;
+
+-- Gold dimensions (portfolio depends on portfolio_group; security depends on team/entity/asset)
+DROP TABLE IF EXISTS gold.portfolio_dimension;
+DROP TABLE IF EXISTS gold.security_dimension;
+DROP TABLE IF EXISTS gold.asset_dimension;
+DROP TABLE IF EXISTS gold.entity_dimension;
+DROP TABLE IF EXISTS gold.portfolio_group_dimension;
+DROP TABLE IF EXISTS gold.investment_team_dimension;
+
+-- Silver
+DROP TABLE IF EXISTS silver.quarantine;
+DROP TABLE IF EXISTS silver.ws_online_pricing;
+DROP TABLE IF EXISTS silver.ws_online_security;
+DROP TABLE IF EXISTS silver.position_transaction;
+DROP TABLE IF EXISTS silver.[transaction];
+DROP TABLE IF EXISTS silver.security;
+DROP TABLE IF EXISTS silver.asset;
+DROP TABLE IF EXISTS silver.entity_asset_ownership;
+DROP TABLE IF EXISTS silver.portfolio_entity_ownership;
+DROP TABLE IF EXISTS silver.entity;
+DROP TABLE IF EXISTS silver.portfolio;
+DROP TABLE IF EXISTS silver.portfolio_group;
+DROP TABLE IF EXISTS silver.investment_team;
+
+-- Bronze
+DROP TABLE IF EXISTS bronze.src_ws_online_raw;
+DROP TABLE IF EXISTS bronze.src_txn_mgmt_raw;
+DROP TABLE IF EXISTS bronze.src_security_mgmt_raw;
+DROP TABLE IF EXISTS bronze.src_asset_mgmt_raw;
+DROP TABLE IF EXISTS bronze.src_entity_mgmt_raw;
+DROP TABLE IF EXISTS bronze.src_enterprise_raw;
+
+-- Meta (reverse dependency order)
+DROP TABLE IF EXISTS meta.pipeline_execution_log;
+DROP TABLE IF EXISTS meta.extraction_filter_decisions;
+DROP TABLE IF EXISTS meta.extraction_filters;
+DROP TABLE IF EXISTS meta.business_glossary;
+DROP TABLE IF EXISTS meta.retention_policies;
+DROP TABLE IF EXISTS meta.consumers;
+DROP TABLE IF EXISTS meta.quality_rules;
+DROP TABLE IF EXISTS meta.key_crosswalk_paths;
+DROP TABLE IF EXISTS meta.key_crosswalk;
+DROP TABLE IF EXISTS meta.key_registry;
+DROP TABLE IF EXISTS meta.data_contracts;
+DROP TABLE IF EXISTS meta.ingestion_pipeline_steps;
+DROP TABLE IF EXISTS meta.ingestion_pipelines;
+DROP TABLE IF EXISTS meta.source_systems;
+GO
+
+
+-- ============================================================================
 -- PART 1: META TABLES (14)
 -- ============================================================================
 
@@ -56,7 +119,8 @@ CREATE TABLE meta.source_systems (
     is_active               BIT             NOT NULL DEFAULT 1,
     created_at              DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     updated_at              DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
-    CONSTRAINT pk_source_system PRIMARY KEY (source_system_id)
+    CONSTRAINT pk_source_system PRIMARY KEY (source_system_id),
+    CONSTRAINT uq_system_code UNIQUE (system_code)
 );
 GO
 
@@ -81,7 +145,8 @@ CREATE TABLE meta.ingestion_pipelines (
     updated_at              DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     CONSTRAINT pk_pipeline PRIMARY KEY (pipeline_id),
     CONSTRAINT fk_pipeline_source FOREIGN KEY (source_system_id)
-        REFERENCES meta.source_systems (source_system_id)
+        REFERENCES meta.source_systems (source_system_id),
+    CONSTRAINT uq_pipeline_code UNIQUE (pipeline_code)
 );
 GO
 
@@ -213,7 +278,8 @@ CREATE TABLE meta.quality_rules (
     is_active               BIT             NOT NULL DEFAULT 1,
     created_at              DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     updated_at              DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
-    CONSTRAINT pk_quality_rule PRIMARY KEY (rule_id)
+    CONSTRAINT pk_quality_rule PRIMARY KEY (rule_id),
+    CONSTRAINT uq_rule_code UNIQUE (rule_code)
 );
 GO
 
@@ -232,7 +298,8 @@ CREATE TABLE meta.consumers (
     is_active               BIT             NOT NULL DEFAULT 1,
     created_at              DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     updated_at              DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
-    CONSTRAINT pk_consumer PRIMARY KEY (consumer_id)
+    CONSTRAINT pk_consumer PRIMARY KEY (consumer_id),
+    CONSTRAINT uq_consumer_name UNIQUE (consumer_name)
 );
 GO
 
@@ -270,7 +337,8 @@ CREATE TABLE meta.business_glossary (
     is_active               BIT             NOT NULL DEFAULT 1,
     created_at              DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     updated_at              DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
-    CONSTRAINT pk_glossary PRIMARY KEY (term_id)
+    CONSTRAINT pk_glossary PRIMARY KEY (term_id),
+    CONSTRAINT uq_business_term UNIQUE (business_term)
 );
 GO
 
@@ -280,7 +348,7 @@ CREATE TABLE meta.extraction_filters (
     source_system_id        INT             NOT NULL,
     filter_type             NVARCHAR(50)    NOT NULL,
     filter_value            NVARCHAR(255)   NOT NULL,
-    is_enabled              BIT             NOT NULL DEFAULT 1,
+    is_active               BIT             NOT NULL DEFAULT 1,
     rationale               NVARCHAR(MAX)   NULL,
     decided_by              NVARCHAR(255)   NOT NULL,
     effective_date          DATE            NOT NULL,
@@ -312,7 +380,7 @@ GO
 
 -- 1.14 meta.pipeline_execution_log
 CREATE TABLE meta.pipeline_execution_log (
-    execution_id            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    execution_id            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
     pipeline_id             INT             NOT NULL,
     step_id                 INT             NULL,
     job_id                  NVARCHAR(200)   NULL,
@@ -353,7 +421,7 @@ GO
 -- 2.1 bronze.src_enterprise_raw
 -- Multi-entity: _record_type IN ('investment_team','portfolio_group','portfolio')
 CREATE TABLE bronze.src_enterprise_raw (
-    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
     _batch_id               NVARCHAR(100)   NOT NULL,
     _ingested_at            DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _source_file            NVARCHAR(500)   NULL,
@@ -387,7 +455,7 @@ GO
 -- 2.2 bronze.src_entity_mgmt_raw
 -- Multi-entity: _record_type IN ('entity','portfolio_entity_ownership','entity_asset_ownership')
 CREATE TABLE bronze.src_entity_mgmt_raw (
-    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
     _batch_id               NVARCHAR(100)   NOT NULL,
     _ingested_at            DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _source_file            NVARCHAR(500)   NULL,
@@ -415,7 +483,7 @@ GO
 
 -- 2.3 bronze.src_asset_mgmt_raw
 CREATE TABLE bronze.src_asset_mgmt_raw (
-    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
     _batch_id               NVARCHAR(100)   NOT NULL,
     _ingested_at            DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _source_file            NVARCHAR(500)   NULL,
@@ -438,7 +506,7 @@ GO
 
 -- 2.4 bronze.src_security_mgmt_raw
 CREATE TABLE bronze.src_security_mgmt_raw (
-    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
     _batch_id               NVARCHAR(100)   NOT NULL,
     _ingested_at            DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _source_file            NVARCHAR(500)   NULL,
@@ -460,7 +528,7 @@ GO
 
 -- 2.5 bronze.src_txn_mgmt_raw
 CREATE TABLE bronze.src_txn_mgmt_raw (
-    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
     _batch_id               NVARCHAR(100)   NOT NULL,
     _ingested_at            DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _source_file            NVARCHAR(500)   NULL,
@@ -487,7 +555,7 @@ GO
 -- 2.6 bronze.src_ws_online_raw
 -- Multi-entity: _record_type IN ('security','pricing')
 CREATE TABLE bronze.src_ws_online_raw (
-    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    _record_id              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
     _batch_id               NVARCHAR(100)   NOT NULL,
     _ingested_at            DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _source_file            NVARCHAR(500)   NULL,
@@ -529,7 +597,7 @@ CREATE TABLE silver.investment_team (
     stop_date                        DATE            NULL,
     src_investment_team_id           NVARCHAR(50)    NOT NULL,
     _source_system_id                INT             NOT NULL DEFAULT 1,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
     _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
@@ -552,7 +620,7 @@ CREATE TABLE silver.portfolio_group (
     fund_status                      NVARCHAR(50)    NULL,
     src_portfolio_group_id           NVARCHAR(50)    NOT NULL,
     _source_system_id                INT             NOT NULL DEFAULT 1,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
     _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
@@ -569,7 +637,7 @@ CREATE TABLE silver.portfolio (
     portfolio_group_enterprise_key   NVARCHAR(100)   NOT NULL,
     src_portfolio_id                 NVARCHAR(50)    NOT NULL,
     _source_system_id                INT             NOT NULL DEFAULT 1,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
     _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
@@ -590,7 +658,7 @@ CREATE TABLE silver.entity (
     incorporation_date               DATE            NULL,
     src_entity_id                    NVARCHAR(50)    NOT NULL,
     _source_system_id                INT             NOT NULL DEFAULT 2,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
     _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
@@ -608,12 +676,14 @@ CREATE TABLE silver.portfolio_entity_ownership (
     end_date                         DATE            NULL,
     src_ownership_id                 NVARCHAR(50)    NULL,
     _source_system_id                INT             NOT NULL DEFAULT 2,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
     _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
+    _row_hash                        VARBINARY(32)   NULL,
     CONSTRAINT pk_silver_pe_own PRIMARY KEY (portfolio_enterprise_key, entity_enterprise_key, effective_date),
-    CONSTRAINT ck_silver_pe_pct CHECK (ownership_pct > 0 AND ownership_pct <= 1.0)
+    CONSTRAINT ck_silver_pe_pct CHECK (ownership_pct > 0 AND ownership_pct <= 1.0),
+    CONSTRAINT ck_silver_pe_dates CHECK (end_date IS NULL OR end_date > effective_date)
 );
 GO
 
@@ -626,12 +696,14 @@ CREATE TABLE silver.entity_asset_ownership (
     end_date                         DATE            NULL,
     src_ownership_id                 NVARCHAR(50)    NULL,
     _source_system_id                INT             NOT NULL DEFAULT 2,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
     _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
+    _row_hash                        VARBINARY(32)   NULL,
     CONSTRAINT pk_silver_ea_own PRIMARY KEY (entity_enterprise_key, asset_enterprise_key, effective_date),
-    CONSTRAINT ck_silver_ea_pct CHECK (ownership_pct > 0 AND ownership_pct <= 1.0)
+    CONSTRAINT ck_silver_ea_pct CHECK (ownership_pct > 0 AND ownership_pct <= 1.0),
+    CONSTRAINT ck_silver_ea_dates CHECK (end_date IS NULL OR end_date > effective_date)
 );
 GO
 
@@ -652,7 +724,7 @@ CREATE TABLE silver.asset (
     last_valuation_currency          NVARCHAR(3)     NULL,
     src_asset_id                     NVARCHAR(50)    NOT NULL,
     _source_system_id                INT             NOT NULL DEFAULT 3,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
     _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
@@ -680,7 +752,7 @@ CREATE TABLE silver.security (
     _wso_match_confidence            NVARCHAR(20)    NULL,
     src_security_id                  NVARCHAR(50)    NOT NULL,
     _source_system_id                INT             NOT NULL DEFAULT 4,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
     _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
@@ -689,8 +761,8 @@ CREATE TABLE silver.security (
 );
 GO
 
--- 3.9 silver.transaction
-CREATE TABLE silver.[transaction] (
+-- 3.9 silver.position_transaction (renamed from silver.[transaction])
+CREATE TABLE silver.position_transaction (
     stm_transaction_id               NVARCHAR(50)    NOT NULL,
     portfolio_enterprise_key         NVARCHAR(100)   NOT NULL,
     entity_enterprise_key            NVARCHAR(100)   NOT NULL,
@@ -711,12 +783,12 @@ CREATE TABLE silver.[transaction] (
     src_entity_id                    NVARCHAR(50)    NOT NULL,
     src_security_id                  NVARCHAR(50)    NOT NULL,
     _source_system_id                INT             NOT NULL DEFAULT 5,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
     _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
     _row_hash                        VARBINARY(32)   NOT NULL,
-    CONSTRAINT pk_silver_txn PRIMARY KEY (stm_transaction_id)
+    CONSTRAINT pk_silver_pos_txn PRIMARY KEY (stm_transaction_id)
 );
 GO
 
@@ -734,7 +806,7 @@ CREATE TABLE silver.ws_online_security (
     status                           NVARCHAR(50)    NULL,
     last_updated                     DATETIME2       NULL,
     _source_system_id                INT             NOT NULL DEFAULT 6,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
     _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
@@ -754,9 +826,11 @@ CREATE TABLE silver.ws_online_pricing (
     volume                           BIGINT          NULL,
     currency                         NVARCHAR(3)     NULL,
     _source_system_id                INT             NOT NULL DEFAULT 6,
-    _bronze_record_id                NVARCHAR(200)   NULL,
+    _bronze_record_id                NVARCHAR(36)    NULL,
+    _source_modified_at              DATETIME2       NULL,
     _conformed_at                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     _conformed_by                    NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
+    _row_hash                        VARBINARY(32)   NULL,
     CONSTRAINT pk_silver_wso_price PRIMARY KEY (wso_security_id, price_date)
 );
 GO
@@ -774,7 +848,8 @@ CREATE TABLE silver.quarantine (
     resolved_at             DATETIME2       NULL,
     resolved_by             NVARCHAR(255)   NULL,
     resolution_notes        NVARCHAR(500)   NULL,
-    CONSTRAINT pk_silver_quarantine PRIMARY KEY (quarantine_id)
+    CONSTRAINT pk_silver_quarantine PRIMARY KEY (quarantine_id),
+    CONSTRAINT ck_quarantine_status CHECK (resolution_status IN ('PENDING','RESOLVED','REJECTED','REPROCESSED'))
 );
 GO
 
@@ -808,7 +883,7 @@ CREATE TABLE gold.portfolio_group_dimension (
     portfolio_group_name            NVARCHAR(500)   NOT NULL,
     portfolio_group_short_name      NVARCHAR(100)   NULL,
     portfolio_group_description     NVARCHAR(MAX)   NULL,
-    investment_team_enterprise_key  NVARCHAR(100)   NOT NULL,
+    investment_team_key             INT             NOT NULL,
     vintage_year                    INT             NULL,
     strategy                        NVARCHAR(200)   NULL,
     committed_capital               DECIMAL(18,2)   NULL,
@@ -820,7 +895,9 @@ CREATE TABLE gold.portfolio_group_dimension (
     modified_date                   DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     modified_by                     NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
     CONSTRAINT pk_portfolio_group PRIMARY KEY (portfolio_group_key),
-    CONSTRAINT uq_pg_ek UNIQUE (portfolio_group_enterprise_key)
+    CONSTRAINT uq_pg_ek UNIQUE (portfolio_group_enterprise_key),
+    CONSTRAINT fk_pg_team FOREIGN KEY (investment_team_key)
+        REFERENCES gold.investment_team_dimension (investment_team_key)
 );
 GO
 
@@ -898,9 +975,9 @@ CREATE TABLE gold.security_dimension (
     security_group                  NVARCHAR(100)   NULL,
     security_name                   NVARCHAR(500)   NULL,
     security_status                 NVARCHAR(50)    NOT NULL DEFAULT 'ACTIVE',
-    investment_team_enterprise_key  NVARCHAR(100)   NOT NULL,
-    entity_enterprise_key           NVARCHAR(100)   NOT NULL,
-    asset_enterprise_key            NVARCHAR(100)   NOT NULL,
+    investment_team_key             INT             NOT NULL,
+    entity_key                      INT             NOT NULL,
+    asset_key                       INT             NOT NULL,
     bank_loan_id                    NVARCHAR(50)    NULL,
     cusip                           NVARCHAR(9)     NULL,
     isin                            NVARCHAR(12)    NULL,
@@ -911,7 +988,13 @@ CREATE TABLE gold.security_dimension (
     modified_date                   DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
     modified_by                     NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
     CONSTRAINT pk_security PRIMARY KEY (security_key),
-    CONSTRAINT uq_security_ek UNIQUE (security_enterprise_key)
+    CONSTRAINT uq_security_ek UNIQUE (security_enterprise_key),
+    CONSTRAINT fk_sec_team FOREIGN KEY (investment_team_key)
+        REFERENCES gold.investment_team_dimension (investment_team_key),
+    CONSTRAINT fk_sec_entity FOREIGN KEY (entity_key)
+        REFERENCES gold.entity_dimension (entity_key),
+    CONSTRAINT fk_sec_asset FOREIGN KEY (asset_key)
+        REFERENCES gold.asset_dimension (asset_key)
 );
 GO
 
@@ -941,6 +1024,8 @@ CREATE TABLE gold.position_transactions_fact (
     order_id                        NVARCHAR(200)   NULL,
     order_date                      DATE            NULL,
     order_status                    NVARCHAR(50)    NULL,
+    created_date                    DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
+    created_by                      NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
     CONSTRAINT pk_position_txn PRIMARY KEY (position_transaction_fact_key),
     CONSTRAINT fk_ptxn_portfolio FOREIGN KEY (portfolio_key)
         REFERENCES gold.portfolio_dimension (portfolio_key),
@@ -949,7 +1034,8 @@ CREATE TABLE gold.position_transactions_fact (
     CONSTRAINT fk_ptxn_security FOREIGN KEY (security_key)
         REFERENCES gold.security_dimension (security_key),
     CONSTRAINT fk_ptxn_source FOREIGN KEY (source_system_key)
-        REFERENCES meta.source_systems (source_system_id)
+        REFERENCES meta.source_systems (source_system_id),
+    CONSTRAINT uq_ptxn_source_id UNIQUE (source_system_transaction_id)
 );
 GO
 
@@ -992,7 +1078,10 @@ CREATE TABLE gold.portfolio_entity_bridge (
         REFERENCES gold.portfolio_dimension (portfolio_key),
     CONSTRAINT fk_pe_entity FOREIGN KEY (entity_key)
         REFERENCES gold.entity_dimension (entity_key),
-    CONSTRAINT ck_pe_ownership CHECK (ownership_pct > 0 AND ownership_pct <= 1.0)
+    CONSTRAINT fk_pe_source FOREIGN KEY (source_system_key)
+        REFERENCES meta.source_systems (source_system_id),
+    CONSTRAINT ck_pe_ownership CHECK (ownership_pct > 0 AND ownership_pct <= 1.0),
+    CONSTRAINT ck_pe_dates CHECK (end_date IS NULL OR end_date > effective_date)
 );
 GO
 
@@ -1013,11 +1102,14 @@ CREATE TABLE gold.entity_asset_bridge (
         REFERENCES gold.entity_dimension (entity_key),
     CONSTRAINT fk_ea_asset FOREIGN KEY (asset_key)
         REFERENCES gold.asset_dimension (asset_key),
-    CONSTRAINT ck_ea_ownership CHECK (ownership_pct > 0 AND ownership_pct <= 1.0)
+    CONSTRAINT fk_ea_source FOREIGN KEY (source_system_key)
+        REFERENCES meta.source_systems (source_system_id),
+    CONSTRAINT ck_ea_ownership CHECK (ownership_pct > 0 AND ownership_pct <= 1.0),
+    CONSTRAINT ck_ea_dates CHECK (end_date IS NULL OR end_date > effective_date)
 );
 GO
 
--- 5.5 gold.position_team_bridge (M:N position ↔ team allocation)
+-- 5.5 gold.position_team_bridge (M:N position <-> team allocation)
 CREATE TABLE gold.position_team_bridge (
     position_fact_key               INT             NOT NULL,
     investment_team_key             INT             NOT NULL,
@@ -1036,7 +1128,7 @@ GO
 -- PART 6: AUDIT TABLE
 -- ============================================================================
 CREATE TABLE audit.etl_run_log (
-    run_id                  UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    run_id                  UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
     pipeline_code           NVARCHAR(200)   NOT NULL,
     target_layer            NVARCHAR(20)    NOT NULL,
     target_table            NVARCHAR(500)   NOT NULL,
@@ -1052,13 +1144,65 @@ CREATE TABLE audit.etl_run_log (
     error_message           NVARCHAR(MAX)   NULL,
     executed_by             NVARCHAR(255)   NOT NULL DEFAULT SYSTEM_USER,
     created_at              DATETIME2       NOT NULL DEFAULT GETUTCDATE(),
-    CONSTRAINT pk_etl_run PRIMARY KEY (run_id)
+    CONSTRAINT pk_etl_run PRIMARY KEY (run_id),
+    CONSTRAINT ck_etl_status CHECK (status IN ('RUNNING','SUCCEEDED','FAILED')),
+    CONSTRAINT ck_etl_layer CHECK (target_layer IN ('BRONZE','SILVER','GOLD'))
 );
 GO
 
 
 -- ============================================================================
--- PART 7: VERIFICATION
+-- PART 7: NONCLUSTERED INDEXES
+-- ============================================================================
+
+-- Bronze (filter columns)
+CREATE NONCLUSTERED INDEX ix_enterprise_raw_type ON bronze.src_enterprise_raw(_record_type) INCLUDE (_batch_id);
+CREATE NONCLUSTERED INDEX ix_entity_mgmt_raw_type ON bronze.src_entity_mgmt_raw(_record_type) INCLUDE (_batch_id);
+CREATE NONCLUSTERED INDEX ix_ws_online_raw_type ON bronze.src_ws_online_raw(_record_type) INCLUDE (_batch_id);
+CREATE NONCLUSTERED INDEX ix_enterprise_raw_ingested ON bronze.src_enterprise_raw(_ingested_at);
+CREATE NONCLUSTERED INDEX ix_entity_mgmt_raw_ingested ON bronze.src_entity_mgmt_raw(_ingested_at);
+CREATE NONCLUSTERED INDEX ix_asset_mgmt_raw_ingested ON bronze.src_asset_mgmt_raw(_ingested_at);
+CREATE NONCLUSTERED INDEX ix_security_mgmt_raw_ingested ON bronze.src_security_mgmt_raw(_ingested_at);
+CREATE NONCLUSTERED INDEX ix_txn_mgmt_raw_ingested ON bronze.src_txn_mgmt_raw(_ingested_at);
+CREATE NONCLUSTERED INDEX ix_ws_online_raw_ingested ON bronze.src_ws_online_raw(_ingested_at);
+GO
+
+-- Silver (FK reference columns)
+CREATE NONCLUSTERED INDEX ix_silver_pg_team ON silver.portfolio_group(investment_team_enterprise_key);
+CREATE NONCLUSTERED INDEX ix_silver_port_pg ON silver.portfolio(portfolio_group_enterprise_key);
+CREATE NONCLUSTERED INDEX ix_silver_sec_team ON silver.security(investment_team_enterprise_key);
+CREATE NONCLUSTERED INDEX ix_silver_sec_entity ON silver.security(entity_enterprise_key);
+CREATE NONCLUSTERED INDEX ix_silver_sec_asset ON silver.security(asset_enterprise_key);
+CREATE NONCLUSTERED INDEX ix_silver_txn_portfolio ON silver.position_transaction(portfolio_enterprise_key);
+CREATE NONCLUSTERED INDEX ix_silver_txn_entity ON silver.position_transaction(entity_enterprise_key);
+CREATE NONCLUSTERED INDEX ix_silver_txn_security ON silver.position_transaction(security_enterprise_key);
+CREATE NONCLUSTERED INDEX ix_silver_txn_date ON silver.position_transaction(as_of_date);
+CREATE NONCLUSTERED INDEX ix_silver_wso_price_sec ON silver.ws_online_pricing(wso_security_id);
+CREATE NONCLUSTERED INDEX ix_silver_quarantine_source ON silver.quarantine(source_table, resolution_status);
+GO
+
+-- Gold (fact dimension keys + date)
+CREATE NONCLUSTERED INDEX ix_ptxn_portfolio ON gold.position_transactions_fact(portfolio_key);
+CREATE NONCLUSTERED INDEX ix_ptxn_entity ON gold.position_transactions_fact(entity_key);
+CREATE NONCLUSTERED INDEX ix_ptxn_security ON gold.position_transactions_fact(security_key);
+CREATE NONCLUSTERED INDEX ix_ptxn_date ON gold.position_transactions_fact(as_of_date);
+CREATE NONCLUSTERED INDEX ix_ptxn_source_txn ON gold.position_transactions_fact(source_system_transaction_id);
+CREATE NONCLUSTERED INDEX ix_pos_portfolio ON gold.position_fact(portfolio_key);
+CREATE NONCLUSTERED INDEX ix_pos_entity ON gold.position_fact(entity_key);
+CREATE NONCLUSTERED INDEX ix_pos_security ON gold.position_fact(security_key);
+CREATE NONCLUSTERED INDEX ix_pos_date ON gold.position_fact(as_of_date);
+CREATE NONCLUSTERED INDEX ix_pe_bridge_entity ON gold.portfolio_entity_bridge(entity_key);
+CREATE NONCLUSTERED INDEX ix_ea_bridge_asset ON gold.entity_asset_bridge(asset_key);
+GO
+
+-- Audit
+CREATE NONCLUSTERED INDEX ix_etl_pipeline ON audit.etl_run_log(pipeline_code, start_time DESC);
+CREATE NONCLUSTERED INDEX ix_etl_status ON audit.etl_run_log(status) INCLUDE (pipeline_code, start_time);
+GO
+
+
+-- ============================================================================
+-- PART 8: VERIFICATION
 -- ============================================================================
 PRINT '=== TABLE COUNTS BY SCHEMA ==='
 SELECT
@@ -1070,5 +1214,5 @@ WHERE s.name IN ('meta','bronze','silver','gold','audit')
 GROUP BY s.name
 ORDER BY s.name;
 
--- Expected: meta=14, bronze=6, silver=12 (11 + quarantine), gold=11, audit=1 → 44 total
+-- Expected: meta=14, bronze=6, silver=12 (11 + quarantine), gold=11, audit=1 -> 44 total
 GO

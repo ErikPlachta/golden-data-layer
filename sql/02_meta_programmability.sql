@@ -59,6 +59,7 @@ END;
 GO
 
 -- Enterprise key translator — applies crosswalk rule (prefix replacement)
+-- FIX: Added prefix validation — returns NULL if source key doesn't start with expected prefix
 CREATE OR ALTER FUNCTION meta.fn_translate_key(
     @source_key   NVARCHAR(200),
     @strip_prefix NVARCHAR(50),
@@ -67,6 +68,7 @@ CREATE OR ALTER FUNCTION meta.fn_translate_key(
 AS
 BEGIN
     IF @source_key IS NULL RETURN NULL;
+    IF LEFT(@source_key, LEN(@strip_prefix)) != @strip_prefix RETURN NULL;
     RETURN @add_prefix + SUBSTRING(@source_key, LEN(@strip_prefix) + 1, LEN(@source_key));
 END;
 GO
@@ -374,7 +376,7 @@ BEGIN
     DECLARE @pipeline_id INT, @source_system_id INT;
     SELECT @pipeline_id = pipeline_id, @source_system_id = source_system_id
     FROM meta.ingestion_pipelines
-    WHERE pipeline_code = @pipeline_code;
+    WHERE pipeline_code = @pipeline_code AND is_active = 1;
 
     IF @pipeline_id IS NULL
     BEGIN
@@ -451,7 +453,7 @@ BEGIN
 
     DECLARE @source_system_id INT;
     SELECT @source_system_id = source_system_id
-    FROM meta.source_systems WHERE system_code = @source_system_code;
+    FROM meta.source_systems WHERE system_code = @source_system_code AND is_active = 1;
 
     IF @source_system_id IS NULL
     BEGIN
@@ -504,6 +506,10 @@ GO
 -- ============================================================================
 -- PART 8: CRUD — KEY CROSSWALK
 -- Natural key: from_key_id + to_key_id (resolved via key_name pairs)
+-- WARNING: key_name lookups do not include source_system_id, which could cause
+-- ambiguous matches if the same key_name exists across multiple source systems.
+-- Using TOP 1 with ORDER BY source_system_id for deterministic results.
+-- A future fix should add source_system_code parameters to these procs.
 -- ============================================================================
 
 CREATE OR ALTER PROCEDURE meta.usp_upsert_key_crosswalk
@@ -522,8 +528,8 @@ BEGIN
     SET NOCOUNT ON;
 
     DECLARE @from_key_id INT, @to_key_id INT;
-    SELECT @from_key_id = key_id FROM meta.key_registry WHERE key_name = @from_key_name;
-    SELECT @to_key_id   = key_id FROM meta.key_registry WHERE key_name = @to_key_name;
+    SELECT TOP 1 @from_key_id = key_id FROM meta.key_registry WHERE key_name = @from_key_name AND is_active = 1 ORDER BY source_system_id;
+    SELECT TOP 1 @to_key_id   = key_id FROM meta.key_registry WHERE key_name = @to_key_name AND is_active = 1 ORDER BY source_system_id;
 
     IF @from_key_id IS NULL OR @to_key_id IS NULL
     BEGIN
@@ -561,8 +567,8 @@ BEGIN
     SET NOCOUNT ON;
 
     DECLARE @from_key_id INT, @to_key_id INT;
-    SELECT @from_key_id = key_id FROM meta.key_registry WHERE key_name = @from_key_name;
-    SELECT @to_key_id   = key_id FROM meta.key_registry WHERE key_name = @to_key_name;
+    SELECT TOP 1 @from_key_id = key_id FROM meta.key_registry WHERE key_name = @from_key_name AND is_active = 1 ORDER BY source_system_id;
+    SELECT TOP 1 @to_key_id   = key_id FROM meta.key_registry WHERE key_name = @to_key_name AND is_active = 1 ORDER BY source_system_id;
 
     UPDATE meta.key_crosswalk
     SET is_active = 0, updated_at = GETUTCDATE()
@@ -860,6 +866,7 @@ GO
 -- ============================================================================
 -- PART 14: CRUD — EXTRACTION FILTERS
 -- Natural key: source_system_code + filter_type + filter_value
+-- FIX: Changed is_enabled to is_active (column was renamed in DDL)
 -- ============================================================================
 
 CREATE OR ALTER PROCEDURE meta.usp_upsert_extraction_filter
@@ -868,7 +875,7 @@ CREATE OR ALTER PROCEDURE meta.usp_upsert_extraction_filter
     @filter_value       NVARCHAR(255),
     @decided_by         NVARCHAR(255),
     @effective_date     DATE,
-    @is_enabled         BIT            = 1,
+    @is_active          BIT            = 1,
     @rationale          NVARCHAR(MAX)  = NULL,
     @expiration_date    DATE           = NULL
 AS
@@ -877,7 +884,7 @@ BEGIN
 
     DECLARE @source_system_id INT;
     SELECT @source_system_id = source_system_id
-    FROM meta.source_systems WHERE system_code = @source_system_code;
+    FROM meta.source_systems WHERE system_code = @source_system_code AND is_active = 1;
 
     IF @source_system_id IS NULL
     BEGIN
@@ -889,17 +896,17 @@ BEGIN
     USING (SELECT @source_system_id AS ssid, @filter_type AS ft, @filter_value AS fv) AS src
         ON tgt.source_system_id = src.ssid AND tgt.filter_type = src.ft AND tgt.filter_value = src.fv
     WHEN MATCHED THEN UPDATE SET
-        is_enabled      = @is_enabled,
+        is_active       = @is_active,
         rationale       = @rationale,
         decided_by      = @decided_by,
         effective_date  = @effective_date,
         expiration_date = @expiration_date,
         updated_at      = GETUTCDATE()
     WHEN NOT MATCHED THEN INSERT
-        (source_system_id, filter_type, filter_value, is_enabled, rationale,
+        (source_system_id, filter_type, filter_value, is_active, rationale,
          decided_by, effective_date, expiration_date)
     VALUES
-        (@source_system_id, @filter_type, @filter_value, @is_enabled, @rationale,
+        (@source_system_id, @filter_type, @filter_value, @is_active, @rationale,
          @decided_by, @effective_date, @expiration_date);
 END;
 GO
@@ -917,7 +924,7 @@ BEGIN
     FROM meta.source_systems WHERE system_code = @source_system_code;
 
     UPDATE meta.extraction_filters
-    SET is_enabled = 0, updated_at = GETUTCDATE()
+    SET is_active = 0, updated_at = GETUTCDATE()
     WHERE source_system_id = @source_system_id
       AND filter_type = @filter_type
       AND filter_value = @filter_value;
