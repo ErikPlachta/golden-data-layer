@@ -14,6 +14,9 @@ Thumbs.db
 *.ldf
 *.dacpac
 
+# Environment
+.env
+
 # Temp
 *.tmp
 *.log

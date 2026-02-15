@@ -2,11 +2,11 @@
 
 ## Prerequisites
 
-| Requirement | Version | Notes |
-|---|---|---|
-| Docker Desktop | 4.x+ | Must support linux/arm64 or linux/amd64 |
+| Requirement    | Version                                   | Notes                                               |
+| -------------- | ----------------------------------------- | --------------------------------------------------- |
+| Docker Desktop | 4.x+                                      | Must support linux/arm64 or linux/amd64             |
 | Azure SQL Edge | `mcr.microsoft.com/azure-sql-edge:latest` | SQL Server 15.x compatible. Free developer edition. |
-| SQL client | SSMS, Azure Data Studio, or `sqlcmd` | Any standard SQL client works |
+| SQL client     | SSMS, Azure Data Studio, or `sqlcmd`      | Any standard SQL client works                       |
 
 ### Start the container
 
@@ -28,14 +28,14 @@ sqlcmd -S localhost,1433 -U SA -P 'YourStrong!Pass123' -Q "SELECT @@VERSION"
 
 ## File Inventory
 
-| # | File | Lines | Purpose |
-|---|---|---|---|
-| 1 | `01_ddl.sql` | 1,074 | Database, 5 schemas, 44 tables (14 meta, 6 bronze, 12 silver, 11 gold, 1 audit) |
-| 2 | `02_meta_programmability.sql` | 1,140 | 4 functions + 33 procs (CRUD for all 14 meta tables + queries) |
-| 3 | `03_audit.sql` | 102 | 2 audit procedures + 1 audit view |
-| 4 | `04_silver.sql` | 1,407 | 11 silver transforms + 1 utility + 4 orchestrators + 1 view (17 objects) |
-| 5 | `06_gold.sql` | 895 | 11 gold loads + 2 orchestrators + 4 views (17 objects) |
-| 6 | `05_seed_data.sql` | 612 | Meta seed, bronze dimension data, transaction generator, bad rows |
+| #   | File                          | Lines | Purpose                                                                         |
+| --- | ----------------------------- | ----- | ------------------------------------------------------------------------------- |
+| 1   | `01_ddl.sql`                  | 1,074 | Database, 5 schemas, 44 tables (14 meta, 6 bronze, 12 silver, 11 gold, 1 audit) |
+| 2   | `02_meta_programmability.sql` | 1,140 | 4 functions + 33 procs (CRUD for all 14 meta tables + queries)                  |
+| 3   | `03_audit.sql`                | 102   | 2 audit procedures + 1 audit view                                               |
+| 4   | `04_silver.sql`               | 1,407 | 11 silver transforms + 1 utility + 4 orchestrators + 1 view (17 objects)        |
+| 5   | `06_gold.sql`                 | 895   | 11 gold loads + 2 orchestrators + 4 views (17 objects)                          |
+| 6   | `05_seed_data.sql`            | 612   | Meta seed, bronze dimension data, transaction generator, bad rows               |
 
 ---
 
@@ -43,7 +43,7 @@ sqlcmd -S localhost,1433 -U SA -P 'YourStrong!Pass123' -Q "SELECT @@VERSION"
 
 **Critical:** Files must run in this exact order. Each file depends on objects created by prior files.
 
-```
+```text
 01_ddl.sql          ← Creates DB, schemas, all 44 tables
       ↓
 02_meta_programmability.sql ← 4 functions + CRUD for all 14 meta tables + query procs
@@ -105,7 +105,7 @@ EXEC dbo.usp_run_full_pipeline;
 
 This executes silver then gold in dependency order:
 
-```
+```text
 Silver Phase 1 (independent):  team → pg → portfolio, entity, asset, WSO sec → WSO pricing
 Silver Phase 2 (bridges):      portfolio_entity_ownership, entity_asset_ownership
 Silver Phase 3 (composite):    security (cascading WSO match)
@@ -131,14 +131,14 @@ WHERE s.name IN ('meta','bronze','silver','gold','audit')
 GROUP BY s.name ORDER BY s.name;
 ```
 
-| Schema | Expected |
-|---|---|
-| audit | 1 |
-| bronze | 6 |
-| gold | 11 |
-| meta | 14 |
-| silver | 12 |
-| **Total** | **44** |
+| Schema    | Expected |
+| --------- | -------- |
+| audit     | 1        |
+| bronze    | 6        |
+| gold      | 11       |
+| meta      | 14       |
+| silver    | 12       |
+| **Total** | **44**   |
 
 ### Step 2: After All SQL Files — Programmability Counts
 
@@ -150,17 +150,17 @@ WHERE o.type IN ('P','FN','V') AND s.name IN ('meta','bronze','silver','gold','a
 ORDER BY s.name, o.type, o.name;
 ```
 
-| Type | Expected Count |
-|---|---|
-| Meta functions | 4 (fn_row_hash_2, fn_translate_key, fn_is_valid_date, fn_is_valid_decimal) |
-| Meta procedures | 33 (12 upserts + 11 deactivates + 1 delete + 2 log + 6 queries + 1 utility) |
-| Audit procedures | 2 (start/complete etl_run) |
-| Silver procedures | 16 (1 quarantine_row + 11 transforms + 4 orchestrators) |
-| Gold procedures | 12 (11 loads + 1 orchestrator) |
-| dbo procedures | 1 (usp_run_full_pipeline) |
-| Bronze procedures | 1 (usp_generate_transactions — from 05_seed_data.sql) |
-| Views | 6 (1 audit + 1 silver + 4 gold) |
-| **Total objects** | **75** |
+| Type              | Expected Count                                                              |
+| ----------------- | --------------------------------------------------------------------------- |
+| Meta functions    | 4 (fn_row_hash_2, fn_translate_key, fn_is_valid_date, fn_is_valid_decimal)  |
+| Meta procedures   | 33 (12 upserts + 11 deactivates + 1 delete + 2 log + 6 queries + 1 utility) |
+| Audit procedures  | 2 (start/complete etl_run)                                                  |
+| Silver procedures | 16 (1 quarantine_row + 11 transforms + 4 orchestrators)                     |
+| Gold procedures   | 12 (11 loads + 1 orchestrator)                                              |
+| dbo procedures    | 1 (usp_run_full_pipeline)                                                   |
+| Bronze procedures | 1 (usp_generate_transactions — from 05_seed_data.sql)                       |
+| Views             | 6 (1 audit + 1 silver + 4 gold)                                             |
+| **Total objects** | **75**                                                                      |
 
 ### Step 3: After 05_seed_data.sql — Meta + Bronze Row Counts
 
@@ -179,18 +179,18 @@ UNION ALL SELECT 'meta.business_glossary', COUNT(*) FROM meta.business_glossary
 ORDER BY tbl;
 ```
 
-| Meta Table | Expected |
-|---|---|
-| source_systems | 6 |
-| ingestion_pipelines | 7 |
-| key_registry | 21 |
-| key_crosswalk | 12 |
-| key_crosswalk_paths | 12 |
-| quality_rules | 13 |
-| data_contracts | 6 |
-| consumers | 4 |
-| retention_policies | 9 |
-| business_glossary | 4 |
+| Meta Table          | Expected |
+| ------------------- | -------- |
+| source_systems      | 6        |
+| ingestion_pipelines | 7        |
+| key_registry        | 21       |
+| key_crosswalk       | 12       |
+| key_crosswalk_paths | 12       |
+| quality_rules       | 13       |
+| data_contracts      | 6        |
+| consumers           | 4        |
+| retention_policies  | 9        |
+| business_glossary   | 4        |
 
 ```sql
 -- Bronze
@@ -202,14 +202,14 @@ UNION ALL SELECT 'src_txn_mgmt_raw', COUNT(*) FROM bronze.src_txn_mgmt_raw
 UNION ALL SELECT 'src_ws_online_raw', COUNT(*) FROM bronze.src_ws_online_raw;
 ```
 
-| Bronze Table | Expected | Breakdown |
-|---|---|---|
-| src_enterprise_raw | 17 | 3 teams + 5 funds + 7 portfolios + 2 bad |
-| src_entity_mgmt_raw | 19 | 5 entities + 6 PE ownership + 7 EA ownership + 1 bad |
-| src_asset_mgmt_raw | 8 | 7 assets + 1 bad |
-| src_security_mgmt_raw | 9 | 8 securities + 1 bad |
-| src_txn_mgmt_raw | ~3,000–5,000 | Generated + 1 bad (varies by date range) |
-| src_ws_online_raw | 11 | 6 securities + 4 pricing + 1 bad |
+| Bronze Table          | Expected     | Breakdown                                            |
+| --------------------- | ------------ | ---------------------------------------------------- |
+| src_enterprise_raw    | 17           | 3 teams + 5 funds + 7 portfolios + 2 bad             |
+| src_entity_mgmt_raw   | 19           | 5 entities + 6 PE ownership + 7 EA ownership + 1 bad |
+| src_asset_mgmt_raw    | 8            | 7 assets + 1 bad                                     |
+| src_security_mgmt_raw | 9            | 8 securities + 1 bad                                 |
+| src_txn_mgmt_raw      | ~3,000–5,000 | Generated + 1 bad (varies by date range)             |
+| src_ws_online_raw     | 11           | 6 securities + 4 pricing + 1 bad                     |
 
 ### Step 4: After dbo.usp_run_full_pipeline — Silver + Gold
 
@@ -232,20 +232,20 @@ UNION ALL SELECT 'quarantine', COUNT(*) FROM silver.quarantine
 ORDER BY tbl;
 ```
 
-| Silver Table | Expected |
-|---|---|
-| investment_team | 3 |
-| portfolio_group | 5 |
-| portfolio | 7 |
-| entity | 5 |
-| asset | 7 |
-| security | 8 |
-| ws_online_security | 6 |
-| ws_online_pricing | 4 |
-| portfolio_entity_ownership | 6 |
-| entity_asset_ownership | 7 |
-| transaction | ~3,000–5,000 (matches generated - 1 bad FK) |
-| quarantine | 7 |
+| Silver Table               | Expected                                    |
+| -------------------------- | ------------------------------------------- |
+| investment_team            | 3                                           |
+| portfolio_group            | 5                                           |
+| portfolio                  | 7                                           |
+| entity                     | 5                                           |
+| asset                      | 7                                           |
+| security                   | 8                                           |
+| ws_online_security         | 6                                           |
+| ws_online_pricing          | 4                                           |
+| portfolio_entity_ownership | 6                                           |
+| entity_asset_ownership     | 7                                           |
+| transaction                | ~3,000–5,000 (matches generated - 1 bad FK) |
+| quarantine                 | 7                                           |
 
 ```sql
 -- Gold
@@ -263,19 +263,19 @@ UNION ALL SELECT 'position_team_bridge', COUNT(*) FROM gold.position_team_bridge
 ORDER BY tbl;
 ```
 
-| Gold Table | Expected |
-|---|---|
-| investment_team_dimension | 3 |
-| portfolio_group_dimension | 5 |
-| portfolio_dimension | 7 |
-| entity_dimension | 5 |
-| asset_dimension | 7 |
-| security_dimension | 8 |
-| portfolio_entity_bridge | 6 |
-| entity_asset_bridge | 7 |
-| position_transactions_fact | ~3,000–5,000 |
-| position_fact | Aggregated (< transaction count) |
-| position_team_bridge | = position_fact count |
+| Gold Table                 | Expected                         |
+| -------------------------- | -------------------------------- |
+| investment_team_dimension  | 3                                |
+| portfolio_group_dimension  | 5                                |
+| portfolio_dimension        | 7                                |
+| entity_dimension           | 5                                |
+| asset_dimension            | 7                                |
+| security_dimension         | 8                                |
+| portfolio_entity_bridge    | 6                                |
+| entity_asset_bridge        | 7                                |
+| position_transactions_fact | ~3,000–5,000                     |
+| position_fact              | Aggregated (< transaction count) |
+| position_team_bridge       | = position_fact count            |
 
 ### Step 5: Quarantine Validation
 
@@ -287,15 +287,15 @@ FROM silver.quarantine
 ORDER BY quarantine_id;
 ```
 
-| # | Source | Bad Record | Rule Triggered | What's Wrong |
-|---|---|---|---|---|
-| 1 | silver.investment_team | ENT-IT-10099 | TEAM_NAME_NOT_EMPTY | NULL team_name |
-| 2 | silver.portfolio_group | ENT-PG-20099 | PG_TEAM_EXISTS | References nonexistent team ENT-IT-99999 |
-| 3 | silver.entity | SEM-E-20099 | ENTITY_NAME_NOT_EMPTY | Whitespace-only entity_name |
-| 4 | silver.asset | SAM-A-40099 | ASSET_TYPE_NOT_EMPTY | NULL asset_type |
-| 5 | silver.security | SSM-SEC-50099 | SEC_TYPE_VALID | Invalid type "CRYPTO" |
-| 6 | silver.transaction | STM-TXN-99999 | TXN_SECURITY_EXISTS | References nonexistent security STM-SEC-99999 |
-| 7 | silver.ws_online_pricing | WSO-SEC-70001 | PRICE_DATE_VALID | Unparseable date "NOT-A-DATE" |
+| #   | Source                   | Bad Record    | Rule Triggered        | What's Wrong                                  |
+| --- | ------------------------ | ------------- | --------------------- | --------------------------------------------- |
+| 1   | silver.investment_team   | ENT-IT-10099  | TEAM_NAME_NOT_EMPTY   | NULL team_name                                |
+| 2   | silver.portfolio_group   | ENT-PG-20099  | PG_TEAM_EXISTS        | References nonexistent team ENT-IT-99999      |
+| 3   | silver.entity            | SEM-E-20099   | ENTITY_NAME_NOT_EMPTY | Whitespace-only entity_name                   |
+| 4   | silver.asset             | SAM-A-40099   | ASSET_TYPE_NOT_EMPTY  | NULL asset_type                               |
+| 5   | silver.security          | SSM-SEC-50099 | SEC_TYPE_VALID        | Invalid type "CRYPTO"                         |
+| 6   | silver.transaction       | STM-TXN-99999 | TXN_SECURITY_EXISTS   | References nonexistent security STM-SEC-99999 |
+| 7   | silver.ws_online_pricing | WSO-SEC-70001 | PRICE_DATE_VALID      | Unparseable date "NOT-A-DATE"                 |
 
 ### Step 6: Composite Security Assembly
 
@@ -309,16 +309,16 @@ FROM silver.security
 ORDER BY security_enterprise_key;
 ```
 
-| Security | Match Status | Match Key | Confidence | Why |
-|---|---|---|---|---|
-| SEC-50001 (Meridian Class A) | AMBIGUOUS | CUSIP_AMBIGUOUS | LOW | CUSIP `59156R100` matches 2 WSO records |
-| SEC-50002 (Meridian Suburban) | MATCHED | TICKER_TYPE | MEDIUM | Matched via ticker `MER.SUB` + type `EQUITY` |
-| SEC-50003 (Apex LP Units) | MATCHED | ISIN | HIGH | Matched via ISIN `US03783A1007` |
-| SEC-50004 (Vertex Series B) | UNMATCHED | NULL | NULL | No WSO record exists for private equity |
-| SEC-50005 (Coastal Wind) | MATCHED | BANK_LOAN_ID | HIGH | Matched via `BL-COAST-001` |
-| SEC-50006 (Summit Tranche A) | MATCHED | BANK_LOAN_ID | HIGH | Matched via `BL-SUMMIT-001` |
-| SEC-50007 (Summit Mezz) | UNMATCHED | NULL | NULL | No identifiers to match |
-| SEC-50008 (Summit CDS) | UNMATCHED | NULL | NULL | No identifiers to match |
+| Security                      | Match Status | Match Key       | Confidence | Why                                          |
+| ----------------------------- | ------------ | --------------- | ---------- | -------------------------------------------- |
+| SEC-50001 (Meridian Class A)  | AMBIGUOUS    | CUSIP_AMBIGUOUS | LOW        | CUSIP `59156R100` matches 2 WSO records      |
+| SEC-50002 (Meridian Suburban) | MATCHED      | TICKER_TYPE     | MEDIUM     | Matched via ticker `MER.SUB` + type `EQUITY` |
+| SEC-50003 (Apex LP Units)     | MATCHED      | ISIN            | HIGH       | Matched via ISIN `US03783A1007`              |
+| SEC-50004 (Vertex Series B)   | UNMATCHED    | NULL            | NULL       | No WSO record exists for private equity      |
+| SEC-50005 (Coastal Wind)      | MATCHED      | BANK_LOAN_ID    | HIGH       | Matched via `BL-COAST-001`                   |
+| SEC-50006 (Summit Tranche A)  | MATCHED      | BANK_LOAN_ID    | HIGH       | Matched via `BL-SUMMIT-001`                  |
+| SEC-50007 (Summit Mezz)       | UNMATCHED    | NULL            | NULL       | No identifiers to match                      |
+| SEC-50008 (Summit CDS)        | UNMATCHED    | NULL            | NULL       | No identifiers to match                      |
 
 ### Step 7: Gold Views
 
@@ -360,16 +360,16 @@ Every silver and gold proc logs its run here. Expect ~22 rows after a full pipel
 
 The seed data is designed to exercise specific edge cases:
 
-| Scenario | How to Test |
-|---|---|
-| FK validation / quarantine | 7 bad rows across 6 source tables (see Step 5) |
-| Composite security assembly | 4 match types + 1 ambiguous + 3 unmatched (see Step 6) |
-| Idempotent re-run | Run `dbo.usp_run_full_pipeline` twice — row counts should not change |
-| Hash-based CDC | Modify a bronze record, re-run silver — only changed rows update |
-| Temporal bridges | PE/EA ownership records have effective_date/end_date for SCD |
-| WSO orphan | WSO-SEC-70006 ("Unrelated Corp") has no matching internal security |
-| WSO ambiguous CUSIP | CUSIP `59156R100` matches both WSO-SEC-70001 and WSO-SEC-70005 |
-| Transaction volume | ~3,000–5,000 rows with realistic type distribution and randomized amounts |
+| Scenario                    | How to Test                                                               |
+| --------------------------- | ------------------------------------------------------------------------- |
+| FK validation / quarantine  | 7 bad rows across 6 source tables (see Step 5)                            |
+| Composite security assembly | 4 match types + 1 ambiguous + 3 unmatched (see Step 6)                    |
+| Idempotent re-run           | Run `dbo.usp_run_full_pipeline` twice — row counts should not change      |
+| Hash-based CDC              | Modify a bronze record, re-run silver — only changed rows update          |
+| Temporal bridges            | PE/EA ownership records have effective_date/end_date for SCD              |
+| WSO orphan                  | WSO-SEC-70006 ("Unrelated Corp") has no matching internal security        |
+| WSO ambiguous CUSIP         | CUSIP `59156R100` matches both WSO-SEC-70001 and WSO-SEC-70005            |
+| Transaction volume          | ~3,000–5,000 rows with realistic type distribution and randomized amounts |
 
 ---
 
@@ -387,14 +387,14 @@ audit.*          1 table    ETL run log
 
 ### 6-Source-System Model
 
-| # | System | Code | Owns |
-|---|---|---|---|
-| 1 | Enterprise Data | SRC_ENTERPRISE | Investment team, portfolio group, portfolio |
-| 2 | Entity Management | SRC_ENTITY_MGMT | Entity, PE/EA ownership bridges |
-| 3 | Asset Management | SRC_ASSET_MGMT | Asset |
-| 4 | Security Management | SRC_SECURITY_MGMT | Security |
-| 5 | Transaction Management | SRC_TXN_MGMT | Transactions (refs all dims) |
-| 6 | Wall Street Online | SRC_WS_ONLINE | Public market data, pricing |
+| #   | System                 | Code              | Owns                                        |
+| --- | ---------------------- | ----------------- | ------------------------------------------- |
+| 1   | Enterprise Data        | SRC_ENTERPRISE    | Investment team, portfolio group, portfolio |
+| 2   | Entity Management      | SRC_ENTITY_MGMT   | Entity, PE/EA ownership bridges             |
+| 3   | Asset Management       | SRC_ASSET_MGMT    | Asset                                       |
+| 4   | Security Management    | SRC_SECURITY_MGMT | Security                                    |
+| 5   | Transaction Management | SRC_TXN_MGMT      | Transactions (refs all dims)                |
+| 6   | Wall Street Online     | SRC_WS_ONLINE     | Public market data, pricing                 |
 
 ### Key Translation
 
@@ -433,12 +433,12 @@ Phase 4                         gold.usp_run_all_gold (dims → bridges → fact
 
 Three meta tables have DDL but no seed data. This is intentional:
 
-| Table | Why No Seed |
-|---|---|
-| `meta.ingestion_pipeline_steps` | Granular step definitions — add per-implementation |
-| `meta.extraction_filters` | Source-specific extraction criteria — add when connecting real sources |
-| `meta.extraction_filter_decisions` | Audit trail for filter decisions — populated at runtime |
-| `meta.pipeline_execution_log` | Populated at runtime by `usp_start_etl_run` / `usp_complete_etl_run` |
+| Table                              | Why No Seed                                                            |
+| ---------------------------------- | ---------------------------------------------------------------------- |
+| `meta.ingestion_pipeline_steps`    | Granular step definitions — add per-implementation                     |
+| `meta.extraction_filters`          | Source-specific extraction criteria — add when connecting real sources |
+| `meta.extraction_filter_decisions` | Audit trail for filter decisions — populated at runtime                |
+| `meta.pipeline_execution_log`      | Populated at runtime by `usp_start_etl_run` / `usp_complete_etl_run`   |
 
 These are structural placeholders for production use. The test harness works without them.
 
@@ -501,11 +501,11 @@ DELETE FROM audit.etl_run_log;
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| FK violation on gold load | Silver tables empty | Run `silver.usp_run_all_silver` before gold procs |
-| 0 rows in silver.security | WSO security not loaded yet | Ensure `usp_conform_ws_online_security` runs before `usp_conform_security` |
-| Transaction count = 0 | Security not in silver | Security composite assembly must complete before transaction conform |
-| Quarantine < 7 | Procs ran in wrong order | Run `dbo.usp_run_full_pipeline` which handles dependency order |
-| `Login failed for user 'SA'` | Wrong password or container not ready | Wait 15 sec after `docker run`, verify password |
-| Identity column errors on re-run | IDENTITY seeds not reset | Use full teardown (`DROP DATABASE`) or DBCC CHECKIDENT |
+| Symptom                          | Cause                                 | Fix                                                                        |
+| -------------------------------- | ------------------------------------- | -------------------------------------------------------------------------- |
+| FK violation on gold load        | Silver tables empty                   | Run `silver.usp_run_all_silver` before gold procs                          |
+| 0 rows in silver.security        | WSO security not loaded yet           | Ensure `usp_conform_ws_online_security` runs before `usp_conform_security` |
+| Transaction count = 0            | Security not in silver                | Security composite assembly must complete before transaction conform       |
+| Quarantine < 7                   | Procs ran in wrong order              | Run `dbo.usp_run_full_pipeline` which handles dependency order             |
+| `Login failed for user 'SA'`     | Wrong password or container not ready | Wait 15 sec after `docker run`, verify password                            |
+| Identity column errors on re-run | IDENTITY seeds not reset              | Use full teardown (`DROP DATABASE`) or DBCC CHECKIDENT                     |
