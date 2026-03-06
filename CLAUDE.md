@@ -20,14 +20,12 @@ Files MUST run sequentially. Each file's header lists its dependencies.
 
 | File | Purpose | Objects |
 |---|---|---|
-| `01_ddl.sql` | Database, schemas, all tables (bronze/silver/gold/meta/audit) | 44 tables |
+| `01_ddl.sql` | Database, schemas, all tables (bronze/silver/gold/meta/audit), nonclustered indexes | 44 tables + indexes |
 | `02_meta_programmability.sql` | Meta functions, views, CRUD procs for 14 governance tables | ~40 procs |
-| `03_audit.sql` | ETL run log procs (start/complete) | 2 procs |
+| `03_audit.sql` | ETL run log procs (start/complete/cleanup) | 3 procs |
 | `04_silver.sql` | 11 bronze→silver transform procs + orchestrators + quarantine | ~16 procs |
 | `05_seed_data.sql` | Test data: meta config, bronze records, transaction generator | Seed data |
 | `06_gold.sql` | 11 gold load procs + orchestrators + 4 analytical views | ~15 procs |
-
-Total: ~5,800 lines, 75 programmable objects.
 
 ## Running the Pipeline
 
@@ -53,18 +51,26 @@ Source_Wall_Street_Online      → public market security data, pricing
 ```
 
 ### Key Translation Pattern
-Source-native keys are translated to enterprise keys at the silver layer using prefix replacement rules stored in `meta.key_crosswalk`. Example: `ENT-IT-10001` → `IT-10001`. Gold generates surrogate IDENTITY keys and looks up enterprise keys for joins.
+Source-native keys are translated to enterprise keys at the silver layer using prefix replacement rules stored in `meta.key_crosswalk`. Example: `ENT-IT-10001` → `IT-10001`. The `meta.fn_translate_key` function validates the expected prefix before stripping it — if the source key doesn't start with the expected prefix, it returns NULL (which quarantine rules then catch). Gold generates surrogate IDENTITY keys and looks up enterprise keys for joins.
 
 ### Security Composite Assembly
 `silver.security` is assembled from two inputs: internal records from Source_Security_Management + public market identifiers from WSO (Wall Street Online). Match cascade: bank_loan_id → CUSIP → ISIN → ticker+type. Ambiguous matches are flagged, not auto-enriched.
 
 ### Quarantine Pattern
-Failed quality rules route rows to `silver.quarantine` (centralized) with rule name, raw payload, and resolution tracking. Rows are never silently dropped.
+Failed quality rules route rows to `silver.quarantine` (centralized) with rule name, raw payload, and resolution tracking. Rows are never silently dropped — every silver transform proc has explicit quarantine checks for NULL enterprise keys, NULL required fields, invalid types, and FK violations.
 
 ### Bridge Tables with Ownership %
 - `portfolio_entity_bridge` — which portfolios own what % of which entities
 - `entity_asset_bridge` — which entities own what % of which assets
 - `position_team_bridge` — allocates positions to investment teams (via security→team lookup)
+
+### Star Schema Surrogate Key Pattern
+Gold dimensions use IDENTITY surrogate keys. Dimension-to-dimension references use surrogate INT keys with FK constraints:
+- `portfolio_group_dimension.investment_team_key` → FK to `investment_team_dimension`
+- `portfolio_dimension.portfolio_group_key` → FK to `portfolio_group_dimension`
+- `security_dimension.investment_team_key` → FK to `investment_team_dimension`
+- `security_dimension.entity_key` → FK to `entity_dimension`
+- `security_dimension.asset_key` → FK to `asset_dimension`
 
 ## SQL Server Compatibility Notes
 
@@ -79,39 +85,57 @@ DECLARE @err_msg NVARCHAR(MAX) = ERROR_MESSAGE();
 EXEC audit.usp_complete_etl_run @run_id, 'FAILED', 0, 0, 0, 0, 0, @err_msg;
 ```
 
-### `transaction` is a Reserved Word
-Always bracket: `silver.[transaction]`, never `silver.transaction` in DML.
-
 ### No SQLCMD Mode Dependencies
 File 05 originally used `:setvar` directives. These were removed because SQLCMD mode requires special client config. Dates are hardcoded with comments indicating where to edit.
 
 ### Security Composite Dedup
 The WSO LEFT JOIN in `usp_conform_security` can fan out rows when multiple WSO records match one internal security. A dedup step (`#sec_final_raw` → ROW_NUMBER → `#sec_final`) was added to prevent PK violations. Dedup prefers MATCHED > AMBIGUOUS > UNMATCHED.
 
-### CHARINDEX for Type Validation
-`usp_conform_security` uses `CHARINDEX(type, @valid_types)` for security type validation. This is substring-based — fragile if new types are substrings of existing ones (e.g., adding `DEBT` would false-match `SENIOR_DEBT`). Known minor issue, not a runtime blocker with current type list.
+### Security Type Validation (Delimiter-Wrapped CHARINDEX)
+`usp_conform_security` uses delimiter-wrapped CHARINDEX for exact-match security type validation:
+```sql
+WHERE CHARINDEX(',' + s.security_type + ',', ',' + @valid_types + ',') = 0;
+```
+This prevents substring false positives (e.g., `DEBT` no longer matches `SENIOR_DEBT`).
+
+### DDL Idempotency
+All CREATE TABLE statements are preceded by `DROP TABLE IF EXISTS` guards. Tables are dropped in reverse dependency order (facts → bridges → dimensions → silver → bronze → audit → meta) to respect FK constraints. The entire DDL file can be re-executed safely.
+
+### Position Fact Rebuild Transaction Safety
+`usp_load_position_fact` wraps its DELETE + INSERT rebuild in an explicit `BEGIN TRANSACTION / COMMIT TRANSACTION` with `ROLLBACK` in the CATCH block. This prevents data loss if the rebuild fails partway through.
 
 ## Data Model Summary
 
 ### Dimensions (gold)
 - `investment_team_dimension` — GP / management company teams
-- `portfolio_group_dimension` — Funds (vintage year, strategy, committed capital)
-- `portfolio_dimension` — Collections of investments within a fund
+- `portfolio_group_dimension` — Funds (vintage year, strategy, committed capital; FK to investment_team)
+- `portfolio_dimension` — Collections of investments within a fund (FK to portfolio_group)
 - `entity_dimension` — Legal entities (LLC, LP, SPV, Corp)
 - `asset_dimension` — Physical/financial assets (real estate, infrastructure, etc.)
-- `security_dimension` — Financial instruments (equity, debt, mezzanine, derivatives)
+- `security_dimension` — Financial instruments (equity, debt, mezzanine, derivatives; FKs to team, entity, asset)
 
 ### Facts (gold)
-- `position_transactions_fact` — Individual transactions (append-only)
-- `position_fact` — Summarized daily positions (full rebuild)
+- `position_transactions_fact` — Individual transactions (append-only, UNIQUE on source_system_transaction_id)
+- `position_fact` — Summarized daily positions (full rebuild in explicit transaction)
 
 ### Bridges (gold)
-- `portfolio_entity_bridge` — M:N with ownership_pct + effective dating
-- `entity_asset_bridge` — M:N with ownership_pct + effective dating
+- `portfolio_entity_bridge` — M:N with ownership_pct + effective dating (FK to source_systems)
+- `entity_asset_bridge` — M:N with ownership_pct + effective dating (FK to source_systems)
 - `position_team_bridge` — Allocates positions to teams (currently 1:1, designed for M:N)
 
+### Silver tables
+- `investment_team`, `portfolio_group`, `portfolio`, `entity`, `asset` — conformed dimensions
+- `position_transaction` — conformed transactions (renamed from `[transaction]` to avoid reserved word)
+- `security` — composite assembly from SSM + WSO
+- `ws_online_security`, `ws_online_pricing` — WSO market data
+- `portfolio_entity_ownership`, `entity_asset_ownership` — conformed bridges (with `_row_hash`)
+- `quarantine` — centralized quarantine with status CHECK constraint
+
 ### Meta/Governance (14 tables)
-source_systems, ingestion_pipelines, key_registry, key_crosswalk, key_crosswalk_paths, quality_rules, data_contracts, consumers, retention_policies, business_glossary, lineage_catalog, tag_registry, tag_assignments, change_log
+source_systems, ingestion_pipelines, ingestion_pipeline_steps, data_contracts, key_registry, key_crosswalk, key_crosswalk_paths, quality_rules, consumers, retention_policies, business_glossary, extraction_filters, extraction_filter_decisions, pipeline_execution_log
+
+### Nonclustered Indexes
+All FK reference columns, filter columns, and fact date columns have nonclustered indexes. See the `PART 7: NONCLUSTERED INDEXES` section of `01_ddl.sql`.
 
 ## Pipeline Dependency Order
 
@@ -123,18 +147,20 @@ source_systems, ingestion_pipelines, key_registry, key_crosswalk, key_crosswalk_
 
 ### Gold (4 phases)
 1. **Independent dims**: investment_team, entity, asset
-2. **Dependent dims**: portfolio_group, portfolio (needs PG key), security
+2. **Dependent dims**: portfolio_group (needs team key), portfolio (needs PG key), security (needs team+entity+asset keys)
 3. **Bridges**: portfolio_entity, entity_asset (need surrogate keys)
 4. **Facts**: position_transactions, position_fact, position_team_bridge
 
 ## Coding Conventions
 
 - All procs log via `audit.usp_start_etl_run` / `audit.usp_complete_etl_run`
-- Silver transforms: CTE with ROW_NUMBER dedup → temp table → quarantine checks → MERGE
+- Silver transforms: CTE with ROW_NUMBER dedup → temp table → quarantine checks (no silent drops) → MERGE
 - Gold loads: MERGE on enterprise key (dims) or composite key (bridges)
-- Row change detection via `_row_hash` (HASHBYTES SHA2_256 of business columns only)
-- Audit columns: `_source_system_id`, `_bronze_record_id`, `_source_modified_at`, `_conformed_at`, `_conformed_by`, `_row_hash`
+- Row change detection via `_row_hash` (HASHBYTES SHA2_256 of ALL business columns — including valuations, dates, currencies)
+- Silver audit columns: `_source_system_id`, `_bronze_record_id` (NVARCHAR(36)), `_source_modified_at`, `_conformed_at`, `_conformed_by`, `_row_hash`
 - Gold audit: `created_date`, `created_by`, `modified_date`, `modified_by`
+- Orchestrators use TRY/CATCH with phase tracking for error diagnostics
+- Meta table natural keys have UNIQUE constraints: `system_code`, `pipeline_code`, `rule_code`, `consumer_name`, `business_term`
 
 ## Target Production Platform
 
@@ -147,7 +173,12 @@ Databricks with Unity Catalog. See `docs/` for:
 ## Open Items
 
 1. **Quarantine review workflow** — no tooling yet for data steward review of quarantined rows
-2. **Late-arriving dimensions** — currently quarantines txns referencing missing securities; may need placeholder pattern
+2. **Late-arriving dimensions** — currently quarantines txns referencing missing portfolios/entities/securities; may need placeholder pattern
 3. **Backfill strategy** — no process for re-running historical bronze through silver when rules change
 4. **Quarantine retention** — no purge policy defined yet
-5. **CHARINDEX type validation** — should migrate to exact-match pattern for robustness
+5. **SCD Type 2** — all gold dimensions use Type 1 (overwrite); entity and security dimensions would benefit from SCD2 for historical state tracking
+6. **Date dimension** — no `gold.date_dimension` for fiscal year/quarter analytics
+7. **Gold pricing fact** — `silver.ws_online_pricing` has no corresponding gold table for mark-to-market analytics
+8. **Currency/FX reference** — no currency reference table or historical FX rates for validation
+9. **MERGE audit accuracy** — @@ROWCOUNT after MERGE captures inserts+updates combined; needs OUTPUT $action for exact split
+10. **Stale run cleanup** — `audit.usp_cleanup_stale_runs` available but not scheduled; should be called periodically

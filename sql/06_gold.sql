@@ -110,23 +110,25 @@ BEGIN
         MERGE INTO gold.portfolio_group_dimension AS t
         USING (
             SELECT
-                portfolio_group_enterprise_key,
-                portfolio_group_name,
-                portfolio_group_short_name,
-                portfolio_group_description,
-                investment_team_enterprise_key,
-                vintage_year, strategy,
-                committed_capital, committed_capital_currency,
-                fund_status,
-                _row_hash
-            FROM silver.portfolio_group
+                spg.portfolio_group_enterprise_key,
+                spg.portfolio_group_name,
+                spg.portfolio_group_short_name,
+                spg.portfolio_group_description,
+                git.investment_team_key,
+                spg.vintage_year, spg.strategy,
+                spg.committed_capital, spg.committed_capital_currency,
+                spg.fund_status,
+                spg._row_hash
+            FROM silver.portfolio_group spg
+            INNER JOIN gold.investment_team_dimension git
+                ON git.investment_team_enterprise_key = spg.investment_team_enterprise_key
         ) AS s
         ON t.portfolio_group_enterprise_key = s.portfolio_group_enterprise_key
         WHEN MATCHED AND t._row_hash != s._row_hash THEN UPDATE SET
             t.portfolio_group_name          = s.portfolio_group_name,
             t.portfolio_group_short_name    = s.portfolio_group_short_name,
             t.portfolio_group_description   = s.portfolio_group_description,
-            t.investment_team_enterprise_key = s.investment_team_enterprise_key,
+            t.investment_team_key           = s.investment_team_key,
             t.vintage_year                  = s.vintage_year,
             t.strategy                      = s.strategy,
             t.committed_capital             = s.committed_capital,
@@ -137,12 +139,12 @@ BEGIN
             t.modified_by                   = SYSTEM_USER
         WHEN NOT MATCHED THEN INSERT (
             portfolio_group_enterprise_key, portfolio_group_name, portfolio_group_short_name,
-            portfolio_group_description, investment_team_enterprise_key,
+            portfolio_group_description, investment_team_key,
             vintage_year, strategy, committed_capital, committed_capital_currency, fund_status,
             _row_hash
         ) VALUES (
             s.portfolio_group_enterprise_key, s.portfolio_group_name, s.portfolio_group_short_name,
-            s.portfolio_group_description, s.investment_team_enterprise_key,
+            s.portfolio_group_description, s.investment_team_key,
             s.vintage_year, s.strategy, s.committed_capital, s.committed_capital_currency, s.fund_status,
             s._row_hash
         );
@@ -359,38 +361,44 @@ BEGIN
 
         MERGE INTO gold.security_dimension AS t
         USING (
-            SELECT security_enterprise_key, security_type, security_group, security_name,
-                   security_status, investment_team_enterprise_key,
-                   entity_enterprise_key, asset_enterprise_key,
-                   bank_loan_id, cusip, isin, ticker,
-                   _row_hash
-            FROM silver.security
+            SELECT ss.security_enterprise_key, ss.security_type, ss.security_group, ss.security_name,
+                   ss.security_status,
+                   git.investment_team_key,
+                   ge.entity_key,
+                   ga.asset_key,
+                   ss.bank_loan_id, ss.cusip, ss.isin, ss.ticker,
+                   ss._row_hash
+            FROM silver.security ss
+            INNER JOIN gold.investment_team_dimension git
+                ON git.investment_team_enterprise_key = ss.investment_team_enterprise_key
+            INNER JOIN gold.entity_dimension ge
+                ON ge.entity_enterprise_key = ss.entity_enterprise_key
+            INNER JOIN gold.asset_dimension ga
+                ON ga.asset_enterprise_key = ss.asset_enterprise_key
         ) AS s
         ON t.security_enterprise_key = s.security_enterprise_key
         WHEN MATCHED AND t._row_hash != s._row_hash THEN UPDATE SET
-            t.security_type                  = s.security_type,
-            t.security_group                 = s.security_group,
-            t.security_name                  = s.security_name,
-            t.security_status                = s.security_status,
-            t.investment_team_enterprise_key  = s.investment_team_enterprise_key,
-            t.entity_enterprise_key           = s.entity_enterprise_key,
-            t.asset_enterprise_key            = s.asset_enterprise_key,
-            t.bank_loan_id                   = s.bank_loan_id,
-            t.cusip                          = s.cusip,
-            t.isin                           = s.isin,
-            t.ticker                         = s.ticker,
-            t._row_hash                      = s._row_hash,
-            t.modified_date                  = GETUTCDATE(),
-            t.modified_by                    = SYSTEM_USER
+            t.security_type        = s.security_type,
+            t.security_group       = s.security_group,
+            t.security_name        = s.security_name,
+            t.security_status      = s.security_status,
+            t.investment_team_key  = s.investment_team_key,
+            t.entity_key           = s.entity_key,
+            t.asset_key            = s.asset_key,
+            t.bank_loan_id         = s.bank_loan_id,
+            t.cusip                = s.cusip,
+            t.isin                 = s.isin,
+            t.ticker               = s.ticker,
+            t._row_hash            = s._row_hash,
+            t.modified_date        = GETUTCDATE(),
+            t.modified_by          = SYSTEM_USER
         WHEN NOT MATCHED THEN INSERT (
             security_enterprise_key, security_type, security_group, security_name,
-            security_status, investment_team_enterprise_key,
-            entity_enterprise_key, asset_enterprise_key,
+            security_status, investment_team_key, entity_key, asset_key,
             bank_loan_id, cusip, isin, ticker, _row_hash
         ) VALUES (
             s.security_enterprise_key, s.security_type, s.security_group, s.security_name,
-            s.security_status, s.investment_team_enterprise_key,
-            s.entity_enterprise_key, s.asset_enterprise_key,
+            s.security_status, s.investment_team_key, s.entity_key, s.asset_key,
             s.bank_loan_id, s.cusip, s.isin, s.ticker, s._row_hash
         );
         SET @affected = @@ROWCOUNT;
@@ -540,7 +548,7 @@ BEGIN
     DECLARE @affected INT = 0, @read INT = 0;
 
     BEGIN TRY
-        SELECT @read = COUNT(*) FROM silver.[transaction];
+        SELECT @read = COUNT(*) FROM silver.position_transaction;
 
         -- Insert only new transactions (fact table is append-only for settled txns)
         INSERT INTO gold.position_transactions_fact (
@@ -569,7 +577,7 @@ BEGIN
             st.order_id,
             st.order_date,
             st.order_status
-        FROM silver.[transaction] st
+        FROM silver.position_transaction st
         INNER JOIN gold.portfolio_dimension gp
             ON gp.portfolio_enterprise_key = st.portfolio_enterprise_key
         INNER JOIN gold.entity_dimension ge
@@ -610,7 +618,9 @@ BEGIN
     BEGIN TRY
         SELECT @read = COUNT(*) FROM gold.position_transactions_fact;
 
-        -- Full rebuild strategy (simple for local dev; Databricks would use incremental)
+        -- Full rebuild in explicit transaction for safety
+        BEGIN TRANSACTION;
+
         DELETE FROM gold.position_team_bridge;   -- child FK first
         DELETE FROM gold.position_fact;
 
@@ -633,9 +643,12 @@ BEGIN
         GROUP BY portfolio_key, entity_key, security_key, as_of_date, transaction_type;
         SET @affected = @@ROWCOUNT;
 
+        COMMIT TRANSACTION;
+
         EXEC audit.usp_complete_etl_run @run_id, 'SUCCEEDED', @read, @affected, 0, 0, 0;
     END TRY
     BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         DECLARE @err_msg NVARCHAR(MAX) = ERROR_MESSAGE();
         EXEC audit.usp_complete_etl_run @run_id, 'FAILED', @read, 0, 0, 0, 0, @err_msg;
         THROW;
@@ -646,7 +659,7 @@ GO
 
 -- ============================================================================
 -- 22. gold.position_fact → gold.position_team_bridge
---     Allocates each position to investment team(s) via security → team EK lookup
+--     Allocates each position to investment team(s) via security → team FK lookup
 --     For positions where security maps to a single team: allocation = 1.0
 --     Multi-team positions would require a separate allocation table (future)
 -- ============================================================================
@@ -666,7 +679,7 @@ BEGIN
         -- Clear and rebuild (follows position_fact rebuild)
         DELETE FROM gold.position_team_bridge;
 
-        -- For each position, resolve the team from security → team EK → team dimension
+        -- For each position, resolve the team from security → team FK on security_dimension
         INSERT INTO gold.position_team_bridge (
             position_fact_key,
             investment_team_key,
@@ -674,13 +687,11 @@ BEGIN
         )
         SELECT
             pf.position_fact_key,
-            git.investment_team_key,
-            CAST(1.0 AS DECIMAL(5,4)) AS allocation_pct  -- default: 100% to primary team
+            gs.investment_team_key,
+            CAST(1.0 AS DECIMAL(5,4)) AS allocation_pct
         FROM gold.position_fact pf
         INNER JOIN gold.security_dimension gs
-            ON gs.security_key = pf.security_key
-        INNER JOIN gold.investment_team_dimension git
-            ON git.investment_team_enterprise_key = gs.investment_team_enterprise_key;
+            ON gs.security_key = pf.security_key;
         SET @affected = @@ROWCOUNT;
 
         -- Validation: every position should have exactly 1.0 total allocation
@@ -714,31 +725,37 @@ CREATE OR ALTER PROCEDURE gold.usp_run_all_gold
 AS
 BEGIN
     SET NOCOUNT ON;
+    DECLARE @phase NVARCHAR(50) = 'INIT';
+    BEGIN TRY
+        SET @phase = 'PHASE 1';
+        PRINT '=== GOLD PHASE 1: Dimensions ===';
+        EXEC gold.usp_load_investment_team_dimension;
+        EXEC gold.usp_load_entity_dimension;
+        EXEC gold.usp_load_asset_dimension;
 
-    -- Phase 1: Independent dimensions (can parallelize in Databricks)
-    PRINT '=== GOLD PHASE 1: Dimensions ===';
-    EXEC gold.usp_load_investment_team_dimension;
-    EXEC gold.usp_load_entity_dimension;
-    EXEC gold.usp_load_asset_dimension;
+        SET @phase = 'PHASE 2';
+        PRINT '=== GOLD PHASE 2: Dependent dimensions ===';
+        EXEC gold.usp_load_portfolio_group_dimension;
+        EXEC gold.usp_load_portfolio_dimension;
+        EXEC gold.usp_load_security_dimension;
 
-    -- Phase 2: Dependent dimensions (portfolio needs pg_key, security needs all EKs)
-    PRINT '=== GOLD PHASE 2: Dependent dimensions ===';
-    EXEC gold.usp_load_portfolio_group_dimension;
-    EXEC gold.usp_load_portfolio_dimension;
-    EXEC gold.usp_load_security_dimension;
+        SET @phase = 'PHASE 3';
+        PRINT '=== GOLD PHASE 3: Bridges ===';
+        EXEC gold.usp_load_portfolio_entity_bridge;
+        EXEC gold.usp_load_entity_asset_bridge;
 
-    -- Phase 3: Bridges (need dimension surrogate keys)
-    PRINT '=== GOLD PHASE 3: Bridges ===';
-    EXEC gold.usp_load_portfolio_entity_bridge;
-    EXEC gold.usp_load_entity_asset_bridge;
+        SET @phase = 'PHASE 4';
+        PRINT '=== GOLD PHASE 4: Facts ===';
+        EXEC gold.usp_load_position_transactions_fact;
+        EXEC gold.usp_load_position_fact;
+        EXEC gold.usp_load_position_team_bridge;
 
-    -- Phase 4: Facts (need all dimension keys)
-    PRINT '=== GOLD PHASE 4: Facts ===';
-    EXEC gold.usp_load_position_transactions_fact;
-    EXEC gold.usp_load_position_fact;
-    EXEC gold.usp_load_position_team_bridge;
-
-    PRINT '=== Gold phase complete ===';
+        PRINT '=== Gold phase complete ===';
+    END TRY
+    BEGIN CATCH
+        PRINT 'ERROR in usp_run_all_gold during ' + @phase + ': ' + ERROR_MESSAGE();
+        THROW;
+    END CATCH
 END;
 GO
 
@@ -751,39 +768,48 @@ CREATE OR ALTER PROCEDURE dbo.usp_run_full_pipeline
 AS
 BEGIN
     SET NOCOUNT ON;
+    DECLARE @phase NVARCHAR(50) = 'INIT';
+    BEGIN TRY
+        PRINT '======================================';
+        PRINT '  FULL PIPELINE: ' + CONVERT(NVARCHAR, GETUTCDATE(), 120);
+        PRINT '======================================';
 
-    PRINT '======================================';
-    PRINT '  FULL PIPELINE: ' + CONVERT(NVARCHAR, GETUTCDATE(), 120);
-    PRINT '======================================';
+        SET @phase = 'SILVER';
+        EXEC silver.usp_run_all_silver @batch_id;
 
-    EXEC silver.usp_run_all_silver @batch_id;
-    EXEC gold.usp_run_all_gold;
+        SET @phase = 'GOLD';
+        EXEC gold.usp_run_all_gold;
 
-    PRINT '======================================';
-    PRINT '  PIPELINE COMPLETE: ' + CONVERT(NVARCHAR, GETUTCDATE(), 120);
-    PRINT '======================================';
+        PRINT '======================================';
+        PRINT '  PIPELINE COMPLETE: ' + CONVERT(NVARCHAR, GETUTCDATE(), 120);
+        PRINT '======================================';
 
-    -- Summary
-    SELECT 'silver.investment_team' AS tbl, COUNT(*) AS cnt FROM silver.investment_team
-    UNION ALL SELECT 'silver.portfolio_group', COUNT(*) FROM silver.portfolio_group
-    UNION ALL SELECT 'silver.portfolio', COUNT(*) FROM silver.portfolio
-    UNION ALL SELECT 'silver.entity', COUNT(*) FROM silver.entity
-    UNION ALL SELECT 'silver.asset', COUNT(*) FROM silver.asset
-    UNION ALL SELECT 'silver.security', COUNT(*) FROM silver.security
-    UNION ALL SELECT 'silver.transaction', COUNT(*) FROM silver.[transaction]
-    UNION ALL SELECT 'silver.quarantine', COUNT(*) FROM silver.quarantine
-    UNION ALL SELECT 'gold.investment_team_dimension', COUNT(*) FROM gold.investment_team_dimension
-    UNION ALL SELECT 'gold.portfolio_group_dimension', COUNT(*) FROM gold.portfolio_group_dimension
-    UNION ALL SELECT 'gold.portfolio_dimension', COUNT(*) FROM gold.portfolio_dimension
-    UNION ALL SELECT 'gold.entity_dimension', COUNT(*) FROM gold.entity_dimension
-    UNION ALL SELECT 'gold.asset_dimension', COUNT(*) FROM gold.asset_dimension
-    UNION ALL SELECT 'gold.security_dimension', COUNT(*) FROM gold.security_dimension
-    UNION ALL SELECT 'gold.portfolio_entity_bridge', COUNT(*) FROM gold.portfolio_entity_bridge
-    UNION ALL SELECT 'gold.entity_asset_bridge', COUNT(*) FROM gold.entity_asset_bridge
-    UNION ALL SELECT 'gold.position_transactions_fact', COUNT(*) FROM gold.position_transactions_fact
-    UNION ALL SELECT 'gold.position_fact', COUNT(*) FROM gold.position_fact
-    UNION ALL SELECT 'gold.position_team_bridge', COUNT(*) FROM gold.position_team_bridge
-    ORDER BY tbl;
+        -- Summary
+        SELECT 'silver.investment_team' AS tbl, COUNT(*) AS cnt FROM silver.investment_team
+        UNION ALL SELECT 'silver.portfolio_group', COUNT(*) FROM silver.portfolio_group
+        UNION ALL SELECT 'silver.portfolio', COUNT(*) FROM silver.portfolio
+        UNION ALL SELECT 'silver.entity', COUNT(*) FROM silver.entity
+        UNION ALL SELECT 'silver.asset', COUNT(*) FROM silver.asset
+        UNION ALL SELECT 'silver.security', COUNT(*) FROM silver.security
+        UNION ALL SELECT 'silver.position_transaction', COUNT(*) FROM silver.position_transaction
+        UNION ALL SELECT 'silver.quarantine', COUNT(*) FROM silver.quarantine
+        UNION ALL SELECT 'gold.investment_team_dimension', COUNT(*) FROM gold.investment_team_dimension
+        UNION ALL SELECT 'gold.portfolio_group_dimension', COUNT(*) FROM gold.portfolio_group_dimension
+        UNION ALL SELECT 'gold.portfolio_dimension', COUNT(*) FROM gold.portfolio_dimension
+        UNION ALL SELECT 'gold.entity_dimension', COUNT(*) FROM gold.entity_dimension
+        UNION ALL SELECT 'gold.asset_dimension', COUNT(*) FROM gold.asset_dimension
+        UNION ALL SELECT 'gold.security_dimension', COUNT(*) FROM gold.security_dimension
+        UNION ALL SELECT 'gold.portfolio_entity_bridge', COUNT(*) FROM gold.portfolio_entity_bridge
+        UNION ALL SELECT 'gold.entity_asset_bridge', COUNT(*) FROM gold.entity_asset_bridge
+        UNION ALL SELECT 'gold.position_transactions_fact', COUNT(*) FROM gold.position_transactions_fact
+        UNION ALL SELECT 'gold.position_fact', COUNT(*) FROM gold.position_fact
+        UNION ALL SELECT 'gold.position_team_bridge', COUNT(*) FROM gold.position_team_bridge
+        ORDER BY tbl;
+    END TRY
+    BEGIN CATCH
+        PRINT 'ERROR in usp_run_full_pipeline during ' + @phase + ': ' + ERROR_MESSAGE();
+        THROW;
+    END CATCH
 END;
 GO
 
@@ -813,7 +839,7 @@ SELECT
     e.entity_type,
     e.entity_status
 FROM gold.investment_team_dimension it
-JOIN gold.portfolio_group_dimension pg ON pg.investment_team_enterprise_key = it.investment_team_enterprise_key
+JOIN gold.portfolio_group_dimension pg ON pg.investment_team_key = it.investment_team_key
 JOIN gold.portfolio_dimension p ON p.portfolio_group_key = pg.portfolio_group_key
 LEFT JOIN gold.portfolio_entity_bridge peb ON peb.portfolio_key = p.portfolio_key
     AND (peb.end_date IS NULL OR peb.end_date > CAST(GETUTCDATE() AS DATE))
@@ -872,8 +898,8 @@ JOIN gold.portfolio_dimension p ON p.portfolio_key = pf.portfolio_key
 JOIN gold.portfolio_group_dimension pg ON pg.portfolio_group_key = p.portfolio_group_key
 JOIN gold.entity_dimension e ON e.entity_key = pf.entity_key
 JOIN gold.security_dimension s ON s.security_key = pf.security_key
-JOIN gold.asset_dimension a ON a.asset_enterprise_key = s.asset_enterprise_key
-JOIN gold.investment_team_dimension it ON it.investment_team_enterprise_key = s.investment_team_enterprise_key;
+JOIN gold.asset_dimension a ON a.asset_key = s.asset_key
+JOIN gold.investment_team_dimension it ON it.investment_team_key = s.investment_team_key;
 GO
 
 -- 5.4 Weighted position by team (bridge allocation applied)

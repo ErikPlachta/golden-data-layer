@@ -17,7 +17,7 @@
 --   silver.usp_conform_entity_asset_ownership     (8. Entity Mgmt → EA bridge)
 --   silver.usp_conform_ws_online_pricing      (9. WSO → pricing)
 --   silver.usp_conform_security               (10. Security Mgmt + WSO composite)
---   silver.usp_conform_transaction            (11. Transaction Mgmt → transaction)
+--   silver.usp_conform_transaction            (11. Transaction Mgmt → position_transaction)
 -- Orchestrators (4):
 --   silver.usp_run_enterprise_silver          (team → pg → portfolio)
 --   silver.usp_run_entity_silver              (entity → PE bridge → EA bridge)
@@ -199,10 +199,12 @@ BEGIN
                 src._ingested_at                            AS _source_modified_at,
                 HASHBYTES('SHA2_256', CONCAT_WS('|',
                     TRIM(src.pg_name), NULLIF(TRIM(src.pg_short_name),''),
+                    src.pg_description,
                     meta.fn_translate_key(src.pg_team_ref, 'ENT-IT-', 'IT-'),
                     CAST(TRY_CAST(src.vintage_year AS INT) AS NVARCHAR),
                     TRIM(src.strategy),
                     CAST(TRY_CAST(src.committed_capital AS DECIMAL(18,2)) AS NVARCHAR),
+                    UPPER(TRIM(src.committed_capital_ccy)),
                     UPPER(TRIM(src.fund_status))
                 )) AS _row_hash,
                 ROW_NUMBER() OVER (PARTITION BY src.portfolio_group_id ORDER BY src._ingested_at DESC) AS rn
@@ -222,6 +224,23 @@ BEGIN
         WHERE s.portfolio_group_enterprise_key IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM silver.investment_team t WHERE t.investment_team_enterprise_key = s.investment_team_enterprise_key);
         SET @quar = @@ROWCOUNT;
+
+        -- Quarantine: NULL enterprise key
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.portfolio_group',
+               CONCAT('{"src_id":"', src_portfolio_group_id, '"}'),
+               'NOT_NULL_EK', 'Enterprise key translated to NULL'
+        FROM #staged_pg WHERE portfolio_group_enterprise_key IS NULL;
+        SET @quar = @quar + @@ROWCOUNT;
+
+        -- Quarantine: NULL name
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.portfolio_group',
+               CONCAT('{"ek":"', portfolio_group_enterprise_key, '"}'),
+               'PG_NAME_NOT_EMPTY', 'portfolio_group_name is NULL or empty'
+        FROM #staged_pg WHERE portfolio_group_enterprise_key IS NOT NULL
+          AND (portfolio_group_name IS NULL OR LEN(TRIM(portfolio_group_name)) = 0);
+        SET @quar = @quar + @@ROWCOUNT;
 
         MERGE INTO silver.portfolio_group AS t
         USING (
@@ -315,6 +334,23 @@ BEGIN
           AND NOT EXISTS (SELECT 1 FROM silver.portfolio_group pg WHERE pg.portfolio_group_enterprise_key = s.portfolio_group_enterprise_key);
         SET @quar = @@ROWCOUNT;
 
+        -- Quarantine: NULL enterprise key
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.portfolio',
+               CONCAT('{"src_id":"', src_portfolio_id, '"}'),
+               'NOT_NULL_EK', 'Enterprise key translated to NULL'
+        FROM #staged_port WHERE portfolio_enterprise_key IS NULL;
+        SET @quar = @quar + @@ROWCOUNT;
+
+        -- Quarantine: NULL name
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.portfolio',
+               CONCAT('{"ek":"', portfolio_enterprise_key, '"}'),
+               'PORT_NAME_NOT_EMPTY', 'portfolio_name is NULL or empty'
+        FROM #staged_port WHERE portfolio_enterprise_key IS NOT NULL
+          AND (portfolio_name IS NULL OR LEN(TRIM(portfolio_name)) = 0);
+        SET @quar = @quar + @@ROWCOUNT;
+
         MERGE INTO silver.portfolio AS t
         USING (
             SELECT s.* FROM #staged_port s
@@ -384,7 +420,8 @@ BEGIN
                     TRIM(src.entity_name), NULLIF(TRIM(src.entity_short_name),''),
                     NULLIF(TRIM(src.entity_legal_name),''),
                     UPPER(TRIM(src.entity_type)), UPPER(TRIM(src.entity_status)),
-                    TRIM(src.incorporation_jurisdiction)
+                    TRIM(src.incorporation_jurisdiction),
+                    CAST(TRY_CAST(src.incorporation_date AS DATE) AS NVARCHAR)
                 )) AS _row_hash,
                 ROW_NUMBER() OVER (PARTITION BY src.entity_id ORDER BY src._ingested_at DESC) AS rn
             FROM bronze.src_entity_mgmt_raw src
@@ -401,6 +438,14 @@ BEGIN
                'ENTITY_NAME_NOT_EMPTY', 'entity_name is NULL or empty'
         FROM #staged_ent WHERE entity_name IS NULL OR LEN(TRIM(entity_name)) = 0;
         SET @quar = @@ROWCOUNT;
+
+        -- Quarantine: NULL enterprise key
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.entity',
+               CONCAT('{"src_id":"', src_entity_id, '"}'),
+               'NOT_NULL_EK', 'Enterprise key translated to NULL'
+        FROM #staged_ent WHERE entity_enterprise_key IS NULL;
+        SET @quar = @quar + @@ROWCOUNT;
 
         MERGE INTO silver.entity AS t
         USING (
@@ -476,9 +521,15 @@ BEGIN
                 CAST(src._record_id AS NVARCHAR(200))        AS _bronze_record_id,
                 src._ingested_at                             AS _source_modified_at,
                 HASHBYTES('SHA2_256', CONCAT_WS('|',
-                    TRIM(src.asset_name), UPPER(TRIM(src.asset_type)),
+                    TRIM(src.asset_name), NULLIF(TRIM(src.asset_short_name),''),
+                    NULLIF(TRIM(src.asset_legal_name),''),
+                    UPPER(TRIM(src.asset_type)),
                     UPPER(TRIM(src.asset_subtype)), UPPER(TRIM(src.asset_status)),
-                    TRIM(src.location_country), TRIM(src.location_region)
+                    TRIM(src.location_country), TRIM(src.location_region),
+                    CAST(TRY_CAST(src.acquisition_date AS DATE) AS NVARCHAR),
+                    CAST(TRY_CAST(src.last_valuation_date AS DATE) AS NVARCHAR),
+                    CAST(TRY_CAST(src.last_valuation_amount AS DECIMAL(18,2)) AS NVARCHAR),
+                    UPPER(TRIM(src.last_valuation_currency))
                 )) AS _row_hash,
                 ROW_NUMBER() OVER (PARTITION BY src.asset_id ORDER BY src._ingested_at DESC) AS rn
             FROM bronze.src_asset_mgmt_raw src
@@ -486,6 +537,33 @@ BEGIN
         )
         SELECT * INTO #staged_asset FROM staged WHERE rn = 1;
         SET @read = @@ROWCOUNT;
+
+        -- Quarantine: NULL enterprise key
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.asset',
+               CONCAT('{"src_id":"', src_asset_id, '","name":"', asset_name, '"}'),
+               'NOT_NULL_EK', 'Enterprise key translated to NULL'
+        FROM #staged_asset WHERE asset_enterprise_key IS NULL;
+        SET @quar = @quar + @@ROWCOUNT;
+
+        -- Quarantine: NULL asset name
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.asset',
+               CONCAT('{"ek":"', asset_enterprise_key, '"}'),
+               'ASSET_NAME_NOT_EMPTY', 'asset_name is NULL or empty'
+        FROM #staged_asset WHERE asset_enterprise_key IS NOT NULL
+          AND (asset_name IS NULL OR LEN(TRIM(asset_name)) = 0);
+        SET @quar = @quar + @@ROWCOUNT;
+
+        -- Quarantine: NULL asset type
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.asset',
+               CONCAT('{"ek":"', asset_enterprise_key, '"}'),
+               'ASSET_TYPE_NOT_EMPTY', 'asset_type is NULL or empty'
+        FROM #staged_asset WHERE asset_enterprise_key IS NOT NULL
+          AND asset_name IS NOT NULL AND LEN(TRIM(asset_name)) > 0
+          AND (asset_type IS NULL OR LEN(TRIM(asset_type)) = 0);
+        SET @quar = @quar + @@ROWCOUNT;
 
         MERGE INTO silver.asset AS t
         USING (
@@ -549,7 +627,7 @@ BEGIN
     DECLARE @run_id UNIQUEIDENTIFIER;
     EXEC audit.usp_start_etl_run 'PL_MARKET_DAILY', 'SILVER', 'silver.ws_online_security', 'MERGE', @run_id OUTPUT;
 
-    DECLARE @ins INT = 0, @read INT = 0;
+    DECLARE @ins INT = 0, @quar INT = 0, @read INT = 0;
 
     BEGIN TRY
         ;WITH staged AS (
@@ -579,6 +657,14 @@ BEGIN
         )
         SELECT * INTO #staged_wso FROM staged WHERE rn = 1;
         SET @read = @@ROWCOUNT;
+
+        -- Quarantine: NULL wso_security_id
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.ws_online_security',
+               CONCAT('{"name":"', security_name, '"}'),
+               'NOT_NULL_EK', 'wso_security_id is NULL'
+        FROM #staged_wso WHERE wso_security_id IS NULL;
+        SET @quar = @@ROWCOUNT;
 
         MERGE INTO silver.ws_online_security AS t
         USING (SELECT * FROM #staged_wso WHERE wso_security_id IS NOT NULL) AS s
@@ -611,11 +697,11 @@ BEGIN
         SET @ins = @@ROWCOUNT;
 
         DROP TABLE #staged_wso;
-        EXEC audit.usp_complete_etl_run @run_id, 'SUCCEEDED', @read, @ins, 0, 0, 0;
+        EXEC audit.usp_complete_etl_run @run_id, 'SUCCEEDED', @read, @ins, 0, 0, @quar;
     END TRY
     BEGIN CATCH
         DECLARE @err_msg NVARCHAR(MAX) = ERROR_MESSAGE();
-        EXEC audit.usp_complete_etl_run @run_id, 'FAILED', @read, 0, 0, 0, 0, @err_msg;
+        EXEC audit.usp_complete_etl_run @run_id, 'FAILED', @read, 0, 0, 0, @quar, @err_msg;
         THROW;
     END CATCH
 END;
@@ -651,6 +737,10 @@ BEGIN
                 src.ownership_id                                          AS src_ownership_id,
                 CAST(src._record_id AS NVARCHAR(200))                     AS _bronze_record_id,
                 src._ingested_at                                          AS _source_modified_at,
+                HASHBYTES('SHA2_256', CONCAT_WS('|',
+                    CAST(TRY_CAST(src.ownership_pct AS DECIMAL(5,4)) AS NVARCHAR),
+                    CAST(TRY_CAST(NULLIF(src.end_date, '') AS DATE) AS NVARCHAR)
+                )) AS _row_hash,
                 ROW_NUMBER() OVER (
                     PARTITION BY src.portfolio_ref, src.entity_ref, src.effective_date
                     ORDER BY src._ingested_at DESC
@@ -706,10 +796,11 @@ BEGIN
         ON  t.portfolio_enterprise_key = s.portfolio_enterprise_key
         AND t.entity_enterprise_key    = s.entity_enterprise_key
         AND t.effective_date           = s.effective_date
-        WHEN MATCHED AND (t.ownership_pct != s.ownership_pct OR ISNULL(t.end_date, '9999-12-31') != ISNULL(s.end_date, '9999-12-31'))
+        WHEN MATCHED AND t._row_hash != s._row_hash
         THEN UPDATE SET
             t.ownership_pct       = s.ownership_pct,
             t.end_date            = s.end_date,
+            t._row_hash           = s._row_hash,
             t._source_modified_at = s._source_modified_at,
             t._bronze_record_id   = s._bronze_record_id,
             t._conformed_at       = GETUTCDATE(),
@@ -717,11 +808,11 @@ BEGIN
         WHEN NOT MATCHED THEN INSERT (
             portfolio_enterprise_key, entity_enterprise_key, ownership_pct,
             effective_date, end_date, src_ownership_id,
-            _bronze_record_id, _source_modified_at
+            _bronze_record_id, _source_modified_at, _row_hash
         ) VALUES (
             s.portfolio_enterprise_key, s.entity_enterprise_key, s.ownership_pct,
             s.effective_date, s.end_date, s.src_ownership_id,
-            s._bronze_record_id, s._source_modified_at
+            s._bronze_record_id, s._source_modified_at, s._row_hash
         );
         SET @ins = @@ROWCOUNT;
 
@@ -762,6 +853,10 @@ BEGIN
                 src.ownership_id                                      AS src_ownership_id,
                 CAST(src._record_id AS NVARCHAR(200))                 AS _bronze_record_id,
                 src._ingested_at                                      AS _source_modified_at,
+                HASHBYTES('SHA2_256', CONCAT_WS('|',
+                    CAST(TRY_CAST(src.ownership_pct AS DECIMAL(5,4)) AS NVARCHAR),
+                    CAST(TRY_CAST(NULLIF(src.end_date, '') AS DATE) AS NVARCHAR)
+                )) AS _row_hash,
                 ROW_NUMBER() OVER (
                     PARTITION BY src.entity_ref, src.asset_ref, src.effective_date
                     ORDER BY src._ingested_at DESC
@@ -795,6 +890,15 @@ BEGIN
           AND NOT EXISTS (SELECT 1 FROM silver.asset a WHERE a.asset_enterprise_key = s.asset_enterprise_key);
         SET @quar = @quar + @@ROWCOUNT;
 
+        -- Quarantine: ownership_pct out of range
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.entity_asset_ownership',
+               CONCAT('{"ent_ek":"', s.entity_enterprise_key, '","asset_ek":"', s.asset_enterprise_key, '","pct":"', CAST(s.ownership_pct AS NVARCHAR), '"}'),
+               'EA_PCT_RANGE', 'ownership_pct not in (0, 1.0]'
+        FROM #staged_ea s
+        WHERE s.ownership_pct IS NULL OR s.ownership_pct <= 0 OR s.ownership_pct > 1.0;
+        SET @quar = @quar + @@ROWCOUNT;
+
         MERGE INTO silver.entity_asset_ownership AS t
         USING (
             SELECT s.* FROM #staged_ea s
@@ -808,10 +912,11 @@ BEGIN
         ON  t.entity_enterprise_key = s.entity_enterprise_key
         AND t.asset_enterprise_key  = s.asset_enterprise_key
         AND t.effective_date        = s.effective_date
-        WHEN MATCHED AND (t.ownership_pct != s.ownership_pct OR ISNULL(t.end_date, '9999-12-31') != ISNULL(s.end_date, '9999-12-31'))
+        WHEN MATCHED AND t._row_hash != s._row_hash
         THEN UPDATE SET
             t.ownership_pct       = s.ownership_pct,
             t.end_date            = s.end_date,
+            t._row_hash           = s._row_hash,
             t._source_modified_at = s._source_modified_at,
             t._bronze_record_id   = s._bronze_record_id,
             t._conformed_at       = GETUTCDATE(),
@@ -819,11 +924,11 @@ BEGIN
         WHEN NOT MATCHED THEN INSERT (
             entity_enterprise_key, asset_enterprise_key, ownership_pct,
             effective_date, end_date, src_ownership_id,
-            _bronze_record_id, _source_modified_at
+            _bronze_record_id, _source_modified_at, _row_hash
         ) VALUES (
             s.entity_enterprise_key, s.asset_enterprise_key, s.ownership_pct,
             s.effective_date, s.end_date, s.src_ownership_id,
-            s._bronze_record_id, s._source_modified_at
+            s._bronze_record_id, s._source_modified_at, s._row_hash
         );
         SET @ins = @@ROWCOUNT;
 
@@ -865,6 +970,15 @@ BEGIN
                 TRY_CAST(src.volume AS BIGINT)              AS volume,
                 UPPER(TRIM(src.currency))                   AS currency,
                 CAST(src._record_id AS NVARCHAR(200))       AS _bronze_record_id,
+                src._ingested_at                            AS _source_modified_at,
+                HASHBYTES('SHA2_256', CONCAT_WS('|',
+                    CAST(TRY_CAST(src.price_close AS DECIMAL(18,6)) AS NVARCHAR),
+                    CAST(TRY_CAST(src.price_open AS DECIMAL(18,6)) AS NVARCHAR),
+                    CAST(TRY_CAST(src.price_high AS DECIMAL(18,6)) AS NVARCHAR),
+                    CAST(TRY_CAST(src.price_low AS DECIMAL(18,6)) AS NVARCHAR),
+                    CAST(TRY_CAST(src.volume AS BIGINT) AS NVARCHAR),
+                    UPPER(TRIM(src.currency))
+                )) AS _row_hash,
                 ROW_NUMBER() OVER (
                     PARTITION BY src.wso_security_id, src.price_date
                     ORDER BY src._ingested_at DESC
@@ -903,22 +1017,26 @@ BEGIN
         ) AS s
         ON  t.wso_security_id = s.wso_security_id
         AND t.price_date      = s.price_date
-        WHEN MATCHED THEN UPDATE SET
-            t.price_close     = s.price_close,
-            t.price_open      = s.price_open,
-            t.price_high      = s.price_high,
-            t.price_low       = s.price_low,
-            t.volume          = s.volume,
-            t.currency        = s.currency,
+        WHEN MATCHED AND t._row_hash != s._row_hash THEN UPDATE SET
+            t.price_close       = s.price_close,
+            t.price_open        = s.price_open,
+            t.price_high        = s.price_high,
+            t.price_low         = s.price_low,
+            t.volume            = s.volume,
+            t.currency          = s.currency,
+            t._row_hash         = s._row_hash,
+            t._source_modified_at = s._source_modified_at,
             t._bronze_record_id = s._bronze_record_id,
-            t._conformed_at   = GETUTCDATE(),
-            t._conformed_by   = SYSTEM_USER
+            t._conformed_at     = GETUTCDATE(),
+            t._conformed_by     = SYSTEM_USER
         WHEN NOT MATCHED THEN INSERT (
             wso_security_id, price_date, price_close, price_open,
-            price_high, price_low, volume, currency, _bronze_record_id
+            price_high, price_low, volume, currency,
+            _bronze_record_id, _source_modified_at, _row_hash
         ) VALUES (
             s.wso_security_id, s.price_date, s.price_close, s.price_open,
-            s.price_high, s.price_low, s.volume, s.currency, s._bronze_record_id
+            s.price_high, s.price_low, s.volume, s.currency,
+            s._bronze_record_id, s._source_modified_at, s._row_hash
         );
         SET @ins = @@ROWCOUNT;
 
@@ -976,14 +1094,14 @@ BEGIN
         SELECT * INTO #staged_sec FROM staged WHERE rn = 1;
         SET @read = @@ROWCOUNT;
 
-        -- Quarantine: invalid security_type
+        -- Quarantine: invalid security_type (FIX: exact-match using delimited CHARINDEX)
         DECLARE @valid_types NVARCHAR(MAX) = 'EQUITY,SENIOR_DEBT,MEZZANINE,SUBORDINATED_DEBT,CONVERTIBLE,PREFERRED,DERIVATIVE,WARRANT,OPTION';
         INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
         SELECT 'silver.security',
                CONCAT('{"ek":"', s.security_enterprise_key, '","type":"', s.security_type, '"}'),
                'SEC_TYPE_VALID', 'security_type not in valid list'
         FROM #staged_sec s
-        WHERE CHARINDEX(s.security_type, @valid_types) = 0;
+        WHERE CHARINDEX(',' + s.security_type + ',', ',' + @valid_types + ',') = 0;
         SET @quar = @@ROWCOUNT;
 
         -- Quarantine: missing entity reference
@@ -993,12 +1111,12 @@ BEGIN
                'SEC_HAS_ENTITY', 'entity_enterprise_key is NULL'
         FROM #staged_sec s
         WHERE s.entity_enterprise_key IS NULL
-          AND CHARINDEX(s.security_type, @valid_types) > 0;
+          AND CHARINDEX(',' + s.security_type + ',', ',' + @valid_types + ',') > 0;
         SET @quar = @quar + @@ROWCOUNT;
 
         -- Remove quarantined rows from staging
         DELETE FROM #staged_sec
-        WHERE CHARINDEX(security_type, @valid_types) = 0
+        WHERE CHARINDEX(',' + security_type + ',', ',' + @valid_types + ',') = 0
            OR entity_enterprise_key IS NULL;
 
         -- Stage 2: Composite assembly — match SSM records to WSO records
@@ -1164,7 +1282,7 @@ GO
 
 
 -- ============================================================================
--- 11. Bronze → silver.transaction
+-- 11. Bronze → silver.position_transaction (renamed from silver.[transaction])
 -- ============================================================================
 CREATE OR ALTER PROCEDURE silver.usp_conform_transaction
     @batch_id NVARCHAR(100) = NULL
@@ -1173,7 +1291,7 @@ BEGIN
     SET NOCOUNT ON;
 
     DECLARE @run_id UNIQUEIDENTIFIER;
-    EXEC audit.usp_start_etl_run 'PL_TXN_DAILY', 'SILVER', 'silver.transaction', 'MERGE', @run_id OUTPUT;
+    EXEC audit.usp_start_etl_run 'PL_TXN_DAILY', 'SILVER', 'silver.position_transaction', 'MERGE', @run_id OUTPUT;
 
     DECLARE @ins INT = 0, @quar INT = 0, @read INT = 0;
 
@@ -1202,9 +1320,13 @@ BEGIN
                 CAST(src._record_id AS NVARCHAR(200))                       AS _bronze_record_id,
                 src._ingested_at                                            AS _source_modified_at,
                 HASHBYTES('SHA2_256', CONCAT_WS('|',
-                    src.transaction_id, src.as_of_date,
-                    src.transaction_type, src.transaction_status,
-                    src.amount_portfolio, src.amount_local, src.amount_usd
+                    TRIM(src.transaction_id),
+                    CAST(TRY_CAST(src.as_of_date AS DATE) AS NVARCHAR),
+                    UPPER(TRIM(src.transaction_type)),
+                    UPPER(TRIM(src.transaction_status)),
+                    CAST(TRY_CAST(src.amount_portfolio AS DECIMAL(18,4)) AS NVARCHAR),
+                    CAST(TRY_CAST(src.amount_local AS DECIMAL(18,4)) AS NVARCHAR),
+                    CAST(TRY_CAST(src.amount_usd AS DECIMAL(18,4)) AS NVARCHAR)
                 )) AS _row_hash,
                 ROW_NUMBER() OVER (PARTITION BY src.transaction_id ORDER BY src._ingested_at DESC) AS rn
             FROM bronze.src_txn_mgmt_raw src
@@ -1215,7 +1337,7 @@ BEGIN
 
         -- Quarantine: security FK doesn't exist in silver
         INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
-        SELECT 'silver.transaction',
+        SELECT 'silver.position_transaction',
                CONCAT('{"txn_id":"', s.stm_transaction_id, '","sec_ek":"', s.security_enterprise_key, '"}'),
                'TXN_SECURITY_EXISTS', 'security_enterprise_key not found in silver.security'
         FROM #staged_txn s
@@ -1225,7 +1347,7 @@ BEGIN
 
         -- Quarantine: no amount at all
         INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
-        SELECT 'silver.transaction',
+        SELECT 'silver.position_transaction',
                CONCAT('{"txn_id":"', s.stm_transaction_id, '"}'),
                'TXN_AMOUNT_PRESENT', 'All amount columns are NULL'
         FROM #staged_txn s
@@ -1236,19 +1358,61 @@ BEGIN
 
         -- Quarantine: unparseable as_of_date
         INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
-        SELECT 'silver.transaction',
+        SELECT 'silver.position_transaction',
                CONCAT('{"txn_id":"', s.stm_transaction_id, '"}'),
                'TXN_DATE_VALID', 'as_of_date could not be parsed'
         FROM #staged_txn s WHERE s.as_of_date IS NULL;
         SET @quar = @quar + @@ROWCOUNT;
 
-        MERGE INTO silver.[transaction] AS t
+        -- Quarantine: portfolio FK doesn't exist in silver
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.position_transaction',
+               CONCAT('{"txn_id":"', s.stm_transaction_id, '","port_ek":"', s.portfolio_enterprise_key, '"}'),
+               'TXN_PORTFOLIO_EXISTS', 'portfolio_enterprise_key not found in silver.portfolio'
+        FROM #staged_txn s
+        WHERE s.portfolio_enterprise_key IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM silver.portfolio p WHERE p.portfolio_enterprise_key = s.portfolio_enterprise_key);
+        SET @quar = @quar + @@ROWCOUNT;
+
+        -- Quarantine: entity FK doesn't exist in silver
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.position_transaction',
+               CONCAT('{"txn_id":"', s.stm_transaction_id, '","ent_ek":"', s.entity_enterprise_key, '"}'),
+               'TXN_ENTITY_EXISTS', 'entity_enterprise_key not found in silver.entity'
+        FROM #staged_txn s
+        WHERE s.entity_enterprise_key IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM silver.entity e WHERE e.entity_enterprise_key = s.entity_enterprise_key);
+        SET @quar = @quar + @@ROWCOUNT;
+
+        -- Quarantine: NULL transaction_type
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.position_transaction',
+               CONCAT('{"txn_id":"', s.stm_transaction_id, '"}'),
+               'TXN_TYPE_NOT_NULL', 'transaction_type is NULL'
+        FROM #staged_txn s WHERE s.transaction_type IS NULL;
+        SET @quar = @quar + @@ROWCOUNT;
+
+        -- Quarantine: NULL transaction_status
+        INSERT INTO silver.quarantine (source_table, raw_payload, failed_rule, failure_detail)
+        SELECT 'silver.position_transaction',
+               CONCAT('{"txn_id":"', s.stm_transaction_id, '"}'),
+               'TXN_STATUS_NOT_NULL', 'transaction_status is NULL'
+        FROM #staged_txn s WHERE s.transaction_status IS NULL;
+        SET @quar = @quar + @@ROWCOUNT;
+
+        MERGE INTO silver.position_transaction AS t
         USING (
             SELECT s.* FROM #staged_txn s
             WHERE s.stm_transaction_id IS NOT NULL
               AND s.as_of_date IS NOT NULL
+              AND s.portfolio_enterprise_key IS NOT NULL
+              AND s.entity_enterprise_key IS NOT NULL
               AND s.security_enterprise_key IS NOT NULL
+              AND s.transaction_type IS NOT NULL
+              AND s.transaction_status IS NOT NULL
               AND (s.transaction_amount_usd IS NOT NULL OR s.transaction_amount_local IS NOT NULL OR s.transaction_amount_portfolio IS NOT NULL)
+              AND EXISTS (SELECT 1 FROM silver.portfolio p WHERE p.portfolio_enterprise_key = s.portfolio_enterprise_key)
+              AND EXISTS (SELECT 1 FROM silver.entity e WHERE e.entity_enterprise_key = s.entity_enterprise_key)
               AND EXISTS (SELECT 1 FROM silver.security sec WHERE sec.security_enterprise_key = s.security_enterprise_key)
         ) AS s
         ON t.stm_transaction_id = s.stm_transaction_id
@@ -1316,16 +1480,19 @@ CREATE OR ALTER PROCEDURE silver.usp_run_enterprise_silver
 AS
 BEGIN
     SET NOCOUNT ON;
-    PRINT '>>> silver.usp_conform_investment_team';
-    EXEC silver.usp_conform_investment_team @batch_id;
-
-    PRINT '>>> silver.usp_conform_portfolio_group';
-    EXEC silver.usp_conform_portfolio_group @batch_id;
-
-    PRINT '>>> silver.usp_conform_portfolio';
-    EXEC silver.usp_conform_portfolio @batch_id;
-
-    PRINT '>>> PL_ENTERPRISE_DAILY silver phase complete';
+    BEGIN TRY
+        PRINT '>>> silver.usp_conform_investment_team';
+        EXEC silver.usp_conform_investment_team @batch_id;
+        PRINT '>>> silver.usp_conform_portfolio_group';
+        EXEC silver.usp_conform_portfolio_group @batch_id;
+        PRINT '>>> silver.usp_conform_portfolio';
+        EXEC silver.usp_conform_portfolio @batch_id;
+        PRINT '>>> PL_ENTERPRISE_DAILY silver phase complete';
+    END TRY
+    BEGIN CATCH
+        PRINT 'ERROR in usp_run_enterprise_silver: ' + ERROR_MESSAGE();
+        THROW;
+    END CATCH
 END;
 GO
 CREATE OR ALTER PROCEDURE silver.usp_run_entity_silver
@@ -1333,16 +1500,19 @@ CREATE OR ALTER PROCEDURE silver.usp_run_entity_silver
 AS
 BEGIN
     SET NOCOUNT ON;
-    PRINT '>>> silver.usp_conform_entity';
-    EXEC silver.usp_conform_entity @batch_id;
-
-    PRINT '>>> silver.usp_conform_portfolio_entity_ownership';
-    EXEC silver.usp_conform_portfolio_entity_ownership @batch_id;
-
-    PRINT '>>> silver.usp_conform_entity_asset_ownership';
-    EXEC silver.usp_conform_entity_asset_ownership @batch_id;
-
-    PRINT '>>> PL_ENTITY_DAILY silver phase complete';
+    BEGIN TRY
+        PRINT '>>> silver.usp_conform_entity';
+        EXEC silver.usp_conform_entity @batch_id;
+        PRINT '>>> silver.usp_conform_portfolio_entity_ownership';
+        EXEC silver.usp_conform_portfolio_entity_ownership @batch_id;
+        PRINT '>>> silver.usp_conform_entity_asset_ownership';
+        EXEC silver.usp_conform_entity_asset_ownership @batch_id;
+        PRINT '>>> PL_ENTITY_DAILY silver phase complete';
+    END TRY
+    BEGIN CATCH
+        PRINT 'ERROR in usp_run_entity_silver: ' + ERROR_MESSAGE();
+        THROW;
+    END CATCH
 END;
 GO
 
@@ -1352,13 +1522,17 @@ CREATE OR ALTER PROCEDURE silver.usp_run_market_silver
 AS
 BEGIN
     SET NOCOUNT ON;
-    PRINT '>>> silver.usp_conform_ws_online_security';
-    EXEC silver.usp_conform_ws_online_security @batch_id;
-
-    PRINT '>>> silver.usp_conform_ws_online_pricing';
-    EXEC silver.usp_conform_ws_online_pricing @batch_id;
-
-    PRINT '>>> PL_MARKET_DAILY silver phase complete';
+    BEGIN TRY
+        PRINT '>>> silver.usp_conform_ws_online_security';
+        EXEC silver.usp_conform_ws_online_security @batch_id;
+        PRINT '>>> silver.usp_conform_ws_online_pricing';
+        EXEC silver.usp_conform_ws_online_pricing @batch_id;
+        PRINT '>>> PL_MARKET_DAILY silver phase complete';
+    END TRY
+    BEGIN CATCH
+        PRINT 'ERROR in usp_run_market_silver: ' + ERROR_MESSAGE();
+        THROW;
+    END CATCH
 END;
 GO
 
@@ -1369,27 +1543,34 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    -- Phase 1: Independent dimension sources (can run in parallel in Databricks)
-    PRINT '=== PHASE 1: Independent dimension sources ===';
-    EXEC silver.usp_run_enterprise_silver @batch_id;  -- team → pg → portfolio
-    EXEC silver.usp_conform_entity @batch_id;          -- entity (no FK deps)
-    EXEC silver.usp_conform_asset @batch_id;            -- asset (no FK deps)
-    EXEC silver.usp_run_market_silver @batch_id;        -- WSO security → WSO pricing
+    DECLARE @phase NVARCHAR(50) = 'INIT';
+    BEGIN TRY
+        SET @phase = 'PHASE 1';
+        PRINT '=== PHASE 1: Independent dimension sources ===';
+        EXEC silver.usp_run_enterprise_silver @batch_id;
+        EXEC silver.usp_conform_entity @batch_id;
+        EXEC silver.usp_conform_asset @batch_id;
+        EXEC silver.usp_run_market_silver @batch_id;
 
-    -- Phase 2: Ownership bridges (depend on portfolio + entity + asset)
-    PRINT '=== PHASE 2: Ownership bridges ===';
-    EXEC silver.usp_conform_portfolio_entity_ownership @batch_id;
-    EXEC silver.usp_conform_entity_asset_ownership @batch_id;
+        SET @phase = 'PHASE 2';
+        PRINT '=== PHASE 2: Ownership bridges ===';
+        EXEC silver.usp_conform_portfolio_entity_ownership @batch_id;
+        EXEC silver.usp_conform_entity_asset_ownership @batch_id;
 
-    -- Phase 3: Security composite assembly (depends on WSO security)
-    PRINT '=== PHASE 3: Security composite assembly ===';
-    EXEC silver.usp_conform_security @batch_id;
+        SET @phase = 'PHASE 3';
+        PRINT '=== PHASE 3: Security composite assembly ===';
+        EXEC silver.usp_conform_security @batch_id;
 
-    -- Phase 4: Transactions (depends on all dimensions + security)
-    PRINT '=== PHASE 4: Transactions ===';
-    EXEC silver.usp_conform_transaction @batch_id;
+        SET @phase = 'PHASE 4';
+        PRINT '=== PHASE 4: Transactions ===';
+        EXEC silver.usp_conform_transaction @batch_id;
 
-    PRINT '=== Silver phase complete ===';
+        PRINT '=== Silver phase complete ===';
+    END TRY
+    BEGIN CATCH
+        PRINT 'ERROR in usp_run_all_silver during ' + @phase + ': ' + ERROR_MESSAGE();
+        THROW;
+    END CATCH
 END;
 GO
 

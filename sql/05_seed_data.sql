@@ -103,7 +103,7 @@ VALUES
 (6, 5, 'PL_TXN_DAILY', 'Transaction Management Daily Extract',
  'Pulls daily transaction records. Depends on all dimension pipelines.',
  'INCREMENTAL_CDC', 'CRON', '0 5 * * *',
- 'bronze.src_txn_mgmt_raw', 'silver.transaction',
+ 'bronze.src_txn_mgmt_raw', 'silver.position_transaction',
  '["gold.position_transactions_fact"]',
  'Data Engineering', 90),
 
@@ -202,8 +202,8 @@ GO
 -- 1.5 Crosswalk Paths
 INSERT INTO meta.key_crosswalk_paths (from_key_id, to_key_id, hop_count, path_crosswalk_ids, path_description, path_reliability)
 VALUES
-(18, 5, 2, '[8,14]', 'STM security_id -> security_ek -> asset_ek via security_dimension', 'HIGH'),
-(19, 4, 2, '[12]',   'WSO security_id -> security_ek -> entity_ek via security_dimension', 'HIGH');
+(18, 5, 2, '[11]', 'STM security_id -> security_ek (crosswalk 11) -> asset_ek via security_dimension FK', 'MEDIUM'),
+(19, 4, 2, '[12]', 'WSO security_id -> security_ek (crosswalk 12) -> entity_ek via security_dimension FK', 'MEDIUM');
 GO
 
 -- ----------------------------------------------------------------------------
@@ -221,7 +221,7 @@ VALUES
 ('PE_PCT_RANGE',           'Ownership Pct In Range',           'silver.portfolio_entity_ownership','ownership_pct',             'ownership_pct > 0 AND ownership_pct <= 1.0','VALIDITY',     'EXPECT_OR_FAIL', 'SILVER', 'Data Engineering'),
 ('ASSET_TYPE_NOT_EMPTY',   'Asset Type Required',              'silver.asset',                    'asset_type',                'LEN(TRIM(asset_type)) > 0',                'COMPLETENESS', 'EXPECT_OR_FAIL', 'SILVER', 'Data Engineering'),
 ('SEC_TYPE_VALID',         'Security Type Valid',              'silver.security',                 'security_type',             'security_type IN (EQUITY,SENIOR_DEBT,...)',  'VALIDITY',     'EXPECT_OR_FAIL', 'SILVER', 'Data Engineering'),
-('TXN_SECURITY_EXISTS',   'Transaction Security FK Valid',     'silver.transaction',              'security_enterprise_key',   'EXISTS in silver.security',                 'REFERENTIAL',  'EXPECT_OR_FAIL', 'SILVER', 'Data Engineering'),
+('TXN_SECURITY_EXISTS',   'Transaction Security FK Valid',     'silver.position_transaction',     'security_enterprise_key',   'EXISTS in silver.security',                 'REFERENTIAL',  'EXPECT_OR_FAIL', 'SILVER', 'Data Engineering'),
 ('BRIDGE_ALLOC_SUM',      'Bridge Allocation Sums to 1.0',    'gold.position_team_bridge',       'allocation_pct',            'ABS(SUM(allocation_pct) - 1.0) <= 0.001',  'CONSISTENCY',  'EXPECT_OR_FAIL', 'GOLD',   'Data Engineering'),
 ('BRIDGE_PE_OWNERSHIP',   'Portfolio-Entity Ownership Valid',  'gold.portfolio_entity_bridge',    'ownership_pct',             'SUM(ownership_pct) per portfolio_key <= 1.0','CONSISTENCY', 'EXPECT_OR_FAIL', 'GOLD',   'Data Engineering');
 GO
@@ -255,7 +255,7 @@ VALUES
 ('bronze.src_security_mgmt_raw',  'BRONZE', 90,   7,  30,  60,   180,  'LITE_DAILY_FULL_WEEKLY', 'INTERNAL_POLICY',  'Data Engineering'),
 ('bronze.src_txn_mgmt_raw',       'BRONZE', 365,  14, 30,  180,  NULL, 'LITE_DAILY_FULL_WEEKLY', 'SOX_7YR',          'Data Engineering'),
 ('bronze.src_ws_online_raw',      'BRONZE', 90,   7,  30,  60,   180,  'LITE_DAILY_FULL_WEEKLY', 'INTERNAL_POLICY',  'Data Engineering'),
-('silver.transaction',             'SILVER', 2555, 30, 365, 730,  NULL, 'LITE_DAILY_FULL_WEEKLY', 'SOX_7YR',          'Data Engineering'),
+('silver.position_transaction',    'SILVER', 2555, 30, 365, 730,  NULL, 'LITE_DAILY_FULL_WEEKLY', 'SOX_7YR',          'Data Engineering'),
 ('gold.position_fact',             'GOLD',   3650, 30, 365, 1825, NULL, 'LITE_DAILY_FULL_WEEKLY', 'SOX_7YR',          'Data Engineering'),
 ('gold.position_transactions_fact','GOLD',   3650, 30, 365, 1825, NULL, 'LITE_DAILY_FULL_WEEKLY', 'SOX_7YR',          'Data Engineering');
 GO
@@ -378,7 +378,7 @@ VALUES
 (@seed_batch,@seed_ts,@f_sem,'entity','SEM-E-20004','Coastal Infrastructure Partners','Coastal Infra','Coastal Infrastructure Partners LLC','LLC','ACTIVE','Cayman Islands','2021-02-10',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
 (@seed_batch,@seed_ts,@f_sem,'entity','SEM-E-20005','Summit Credit Opportunities','Summit Credit','Summit Credit Opportunities Fund LLC','LLC','ACTIVE','Delaware','2020-09-01',NULL,NULL,NULL,NULL,NULL,NULL,NULL);
 
--- Portfolio-Entity Ownership (6 rows)
+-- Portfolio-Entity Ownership (7 rows)
 INSERT INTO bronze.src_entity_mgmt_raw (_batch_id,_ingested_at,_source_file,_record_type,entity_id,entity_name,entity_short_name,entity_legal_name,entity_type,entity_status,incorporation_jurisdiction,incorporation_date,ownership_id,portfolio_ref,entity_ref,asset_ref,ownership_pct,effective_date,end_date)
 VALUES
 (@seed_batch,@seed_ts,@f_sem,'portfolio_entity_ownership',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'OWN-PE-001','SEM-P-30001','SEM-E-20001',NULL,'0.6000','2020-06-01',NULL),
@@ -386,7 +386,8 @@ VALUES
 (@seed_batch,@seed_ts,@f_sem,'portfolio_entity_ownership',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'OWN-PE-003','SEM-P-30001','SEM-E-20002',NULL,'0.8000','2021-01-15',NULL),
 (@seed_batch,@seed_ts,@f_sem,'portfolio_entity_ownership',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'OWN-PE-004','SEM-P-30004','SEM-E-20003',NULL,'1.0000','2022-03-01',NULL),
 (@seed_batch,@seed_ts,@f_sem,'portfolio_entity_ownership',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'OWN-PE-005','SEM-P-30007','SEM-E-20004',NULL,'0.5500','2024-06-01',NULL),
-(@seed_batch,@seed_ts,@f_sem,'portfolio_entity_ownership',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'OWN-PE-006','SEM-P-30006','SEM-E-20005',NULL,'1.0000','2021-10-01',NULL);
+(@seed_batch,@seed_ts,@f_sem,'portfolio_entity_ownership',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'OWN-PE-006','SEM-P-30006','SEM-E-20005',NULL,'1.0000','2021-10-01',NULL),
+(@seed_batch,@seed_ts,@f_sem,'portfolio_entity_ownership',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'OWN-PE-007','SEM-P-30005','SEM-E-20003',NULL,'0.4000','2022-03-01',NULL);
 
 -- Entity-Asset Ownership (7 rows)
 INSERT INTO bronze.src_entity_mgmt_raw (_batch_id,_ingested_at,_source_file,_record_type,entity_id,entity_name,entity_short_name,entity_legal_name,entity_type,entity_status,incorporation_jurisdiction,incorporation_date,ownership_id,portfolio_ref,entity_ref,asset_ref,ownership_pct,effective_date,end_date)
@@ -402,6 +403,10 @@ VALUES
 -- BAD: entity with whitespace-only name
 INSERT INTO bronze.src_entity_mgmt_raw (_batch_id,_ingested_at,_source_file,_record_type,entity_id,entity_name,entity_short_name,entity_legal_name,entity_type,entity_status,incorporation_jurisdiction,incorporation_date,ownership_id,portfolio_ref,entity_ref,asset_ref,ownership_pct,effective_date,end_date)
 VALUES (@seed_batch,@seed_ts,@f_sem,'entity','SEM-E-20099','   ',NULL,NULL,'LLC','ACTIVE','Delaware','2025-01-01',NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+
+-- BAD: expired bridge (end_date in the past) - tests bridge temporal logic
+INSERT INTO bronze.src_entity_mgmt_raw (_batch_id,_ingested_at,_source_file,_record_type,entity_id,entity_name,entity_short_name,entity_legal_name,entity_type,entity_status,incorporation_jurisdiction,incorporation_date,ownership_id,portfolio_ref,entity_ref,asset_ref,ownership_pct,effective_date,end_date)
+VALUES (@seed_batch,@seed_ts,@f_sem,'portfolio_entity_ownership',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'OWN-PE-008','SEM-P-30001','SEM-E-20002',NULL,'0.1500','2019-01-01','2020-01-01');
 
 
 -- ============================================================================
@@ -599,7 +604,7 @@ UNION ALL SELECT 'meta.retention_policies',  COUNT(*) FROM meta.retention_polici
 UNION ALL SELECT 'meta.business_glossary',   COUNT(*) FROM meta.business_glossary
 ORDER BY tbl;
 
-PRINT '=== DELIBERATE BAD ROWS (7 total) ==='
+PRINT '=== DELIBERATE BAD ROWS (7 bad rows + edge case data) ==='
 SELECT 'ENT: NULL team name' AS bad_row, COUNT(*) AS cnt FROM bronze.src_enterprise_raw WHERE investment_team_id = 'ENT-IT-10099'
 UNION ALL SELECT 'ENT: ghost team FK',   COUNT(*) FROM bronze.src_enterprise_raw WHERE portfolio_group_id = 'ENT-PG-20099'
 UNION ALL SELECT 'SEM: whitespace name', COUNT(*) FROM bronze.src_entity_mgmt_raw WHERE entity_id = 'SEM-E-20099'

@@ -7,6 +7,7 @@
 -- Procedures:
 --   audit.usp_start_etl_run       Start an ETL run (creates log entry)
 --   audit.usp_complete_etl_run    Complete an ETL run (updates log entry)
+--   audit.usp_cleanup_stale_runs  Mark orphaned RUNNING entries as FAILED
 -- Views:
 --   audit.vw_recent_runs          ETL run history with duration
 -- ============================================================================
@@ -62,6 +63,21 @@ BEGIN
 END;
 GO
 
+-- Stale run cleanup — marks orphaned RUNNING entries as FAILED
+CREATE OR ALTER PROCEDURE audit.usp_cleanup_stale_runs
+    @stale_minutes INT = 120
+AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE audit.etl_run_log
+    SET status = 'FAILED',
+        end_time = GETUTCDATE(),
+        error_message = 'Marked as failed by stale run cleanup after ' + CAST(@stale_minutes AS NVARCHAR) + ' minutes'
+    WHERE status = 'RUNNING'
+      AND DATEDIFF(MINUTE, start_time, GETUTCDATE()) > @stale_minutes;
+END;
+GO
+
 
 -- ============================================================================
 -- VIEWS
@@ -79,6 +95,7 @@ SELECT
     rows_read,
     rows_inserted,
     rows_updated,
+    rows_deleted,
     rows_quarantined,
     DATEDIFF(SECOND, start_time, ISNULL(end_time, GETUTCDATE())) AS duration_seconds,
     start_time,
@@ -98,5 +115,5 @@ FROM sys.objects o
 JOIN sys.schemas s ON o.schema_id = s.schema_id
 WHERE s.name = 'audit' AND o.type IN ('P','V')
 ORDER BY o.type, o.name;
--- Expected: 2 procedures + 1 view = 3 objects
+-- Expected: 3 procedures + 1 view = 4 objects
 GO
